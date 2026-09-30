@@ -1,0 +1,1062 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using Document = Autodesk.Revit.DB.Document;
+
+namespace BeamRebar
+{
+    /// <summary>
+    /// Ventana previa al armado: muestra que se ha detectado en cada viga seleccionada
+    /// (forma de la seccion, tramos, longitud, o el motivo del rechazo) y deja elegir el
+    /// armado: capas de barras corridas de cada cara (con dos diametros por capa),
+    /// bastones, prolongaciones y patillas, distribucion de estribos (global y por
+    /// elemento), ganchos y recubrimiento, con un esquema de la seccion y del alzado que
+    /// se redibuja con cada cambio. Los valores iniciales vienen de config.json y se pueden
+    /// guardar como nuevos valores por defecto. Construida en codigo (sin XAML), con el
+    /// mismo estilo que el add-in de columnas.
+    /// </summary>
+    public sealed class RebarOptionsWindow : System.Windows.Window
+    {
+        private readonly Document _doc;
+        private readonly AppConfig _cfg;
+        private readonly IList<string> _barTypes;
+        private readonly IDictionary<string, double> _diametersMm;
+        private readonly Dictionary<string, string> _typeByDisplay = new Dictionary<string, string>();
+        private readonly IList<string> _hookTypes;
+        private readonly IDictionary<string, double> _hookAngles;
+        private readonly IList<HostAnalysis> _items;
+
+        /// <summary>Configuracion final si el usuario pulso "Armar"; null si cancelo.</summary>
+        public AppConfig Result { get; private set; }
+
+        // --- longitudinales ---
+        private sealed class LayerRow
+        {
+            public LayerCfg Cfg;
+            public ComboBox Corner, Inter;
+            public TextBox Count;
+        }
+        private readonly Dictionary<bool, List<LayerCfg>> _layerStore = new Dictionary<bool, List<LayerCfg>>();
+        private readonly Dictionary<bool, List<LayerRow>> _layerRows = new Dictionary<bool, List<LayerRow>>();
+        private readonly Dictionary<bool, Grid> _layerGrid = new Dictionary<bool, Grid>();
+        private readonly Dictionary<bool, TextBlock> _layerSummary = new Dictionary<bool, TextBlock>();
+        private readonly Dictionary<bool, Button> _layerAdd = new Dictionary<bool, Button>();
+        private TextBox _longStart, _longEnd, _endCover, _leg, _layerClear, _minClear;
+        private CheckBox _legStart, _legEnd;
+
+        // --- barras por capa de la viga seleccionada ---
+        private Grid _ownGrid;
+        private TextBlock _ownCaption;
+        private readonly List<(bool top, int index, TextBox count)> _ownRows = new List<(bool, int, TextBox)>();
+        private HostAnalysis _ownFor;
+        private int _ownTop, _ownBottom;
+        private bool _refreshingOwn;
+
+        // --- bastones ---
+        private sealed class BastonRow
+        {
+            public BastonCfg Cfg;
+            public ComboBox Face, Position, Type, Layer;
+            public TextBox Count, Length, Anchor, From, To;
+        }
+        private readonly List<BastonCfg> _bastonStore = new List<BastonCfg>();
+        private readonly List<BastonRow> _bastonRows = new List<BastonRow>();
+        private Grid _bastonGrid;
+        private TextBlock _bastonMessage;
+
+        // --- estribos y general ---
+        private ComboBox _stType, _stHook, _stOrient, _joined;
+        private TextBox _stDist, _stStartOff, _stEndOff, _cover, _partition;
+        private CheckBox _stSym;
+        private TextBlock _message, _partitionPreview, _previewCaption;
+        private Button _buildButton;
+        private SectionPreview _preview;
+        private ElevationPreview _elevation;
+
+        private readonly Dictionary<HostAnalysis, (System.Windows.Documents.Run kind, System.Windows.Documents.Run detail)> _itemRuns
+            = new Dictionary<HostAnalysis, (System.Windows.Documents.Run, System.Windows.Documents.Run)>();
+        private readonly Dictionary<HostAnalysis, Border> _itemRows = new Dictionary<HostAnalysis, Border>();
+        /// <summary>Marca de agua de la caja de distribucion propia de cada viga (muestra la general).</summary>
+        private readonly Dictionary<HostAnalysis, TextBlock> _distHints = new Dictionary<HostAnalysis, TextBlock>();
+        private HostAnalysis _selected;
+        private bool _building = true;
+        private bool _strictTypes;
+
+        private const string NoHook = "(sin gancho)";
+        private const string SameAsCorner = "(igual que las extremas)";
+        private static readonly Thickness Pad = new Thickness(4, 2, 4, 2);
+        private static readonly Brush SelectedBrush = RevitTheme.Selection;
+        private static readonly string[] LayerLabels = { "automatica", "capa 1", "capa 2", "capa 3" };
+
+        public RebarOptionsWindow(Document doc, AppConfig cfg, IList<string> barTypes, IDictionary<string, double> diametersMm,
+                                  IList<string> hookTypes, IDictionary<string, double> hookAngles, IList<HostAnalysis> items)
+        {
+            _doc = doc;
+            _hookAngles = hookAngles ?? new Dictionary<string, double>();
+            _cfg = cfg;
+            _cfg.Normalize();
+            _diametersMm = diametersMm;
+            _barTypes = barTypes.OrderBy(n => diametersMm.TryGetValue(n, out double mm) ? mm : 0)
+                                .ThenBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (string n in _barTypes) _typeByDisplay[TypeDisplay(n)] = n;
+            _hookTypes = hookTypes;
+            _items = items;
+            foreach (bool top in new[] { true, false })
+            {
+                _layerStore[top] = _cfg.Face(top).Layers.Select(l => l.Clone()).ToList();
+                _layerRows[top] = new List<LayerRow>();
+            }
+            foreach (BastonCfg b in _cfg.Bastones) _bastonStore.Add(b.Clone());
+
+            Title = "Armar vigas";
+            Width = 1240;
+            Height = 860;
+            MinWidth = 1000;
+            MinHeight = 640;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            ShowInTaskbar = false;
+            FontSize = 12;
+
+            RevitTheme.Apply(this);
+            Content = BuildRoot();
+            _selected = _items.FirstOrDefault(i => i.CanBuild);
+            if (_selected != null) SelectItem(_selected);
+            _building = false;
+            Refresh();
+        }
+
+        // ------------------------------------------------------------------
+        // Construccion de la interfaz
+        // ------------------------------------------------------------------
+        private UIElement BuildRoot()
+        {
+            var root = new Grid { Margin = new Thickness(10) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            UIElement elements = BuildElements();
+            Grid.SetRow(elements, 0);
+            root.Children.Add(elements);
+
+            var body = new Grid { Margin = new Thickness(0, 6, 0, 6) };
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var left = new StackPanel();
+            left.Children.Add(BuildLongitudinal());
+            left.Children.Add(BuildBastones());
+            left.Children.Add(BuildStirrups());
+            left.Children.Add(BuildGeneral());
+            var scroll = new ScrollViewer
+            {
+                Content = left, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new Thickness(0, 0, 8, 0)
+            };
+            Grid.SetColumn(scroll, 0);
+            body.Children.Add(scroll);
+
+            UIElement previews = BuildPreviews();
+            Grid.SetColumn(previews, 1);
+            body.Children.Add(previews);
+
+            Grid.SetRow(body, 1);
+            root.Children.Add(body);
+
+            UIElement buttons = BuildButtons();
+            Grid.SetRow(buttons, 2);
+            root.Children.Add(buttons);
+            return root;
+        }
+
+        private UIElement BuildElements()
+        {
+            int ok = _items.Count(i => i.CanBuild);
+            var group = new GroupBox
+            {
+                Header = "Vigas seleccionadas: " + _items.Count + " (" + ok + " armables). Haz clic en una para verla en el esquema. " +
+                         "A la derecha, la distribucion de estribos propia de cada viga (vacio = la general).",
+                Padding = new Thickness(4)
+            };
+            var panel = new StackPanel();
+            foreach (HostAnalysis item in _items)
+            {
+                var row = new Grid { Margin = new Thickness(0, 1, 0, 1) };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var text = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+                text.Inlines.Add(new System.Windows.Documents.Run(item.Tag) { FontWeight = FontWeights.Bold });
+                var kindRun = new System.Windows.Documents.Run(item.Kind + ": ")
+                {
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = item.CanBuild ? RevitTheme.Ok : RevitTheme.Error
+                };
+                var detailRun = new System.Windows.Documents.Run(item.Detail(_cfg));
+                text.Inlines.Add(kindRun);
+                text.Inlines.Add(detailRun);
+                _itemRuns[item] = (kindRun, detailRun);
+                Grid.SetColumn(text, 0);
+                row.Children.Add(text);
+
+                var side = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+                side.Children.Add(new TextBlock { Text = "Estribos de esta viga:", Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+                var dist = new TextBox
+                {
+                    Width = 170, Text = item.DistributionOverride, Background = Brushes.Transparent,
+                    ToolTip = "Distribucion de estribos propia de esta viga, como \"1@50, 10@100, R@200\" (por ejemplo, mas estribos en " +
+                              "una viga mas cargada). Vacio = se usa la distribucion general del apartado Estribos."
+                };
+                var hint = new TextBlock { Foreground = RevitTheme.Hint, Margin = new Thickness(4, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+                var box = new Grid { Width = 170 };
+                box.Children.Add(new Border { Background = RevitTheme.Input });
+                box.Children.Add(hint);
+                box.Children.Add(dist);
+                _distHints[item] = hint;
+                HostAnalysis captured = item;
+                dist.TextChanged += (s, e) => { captured.DistributionOverride = dist.Text; hint.Visibility = dist.Text.Length == 0 ? Visibility.Visible : Visibility.Hidden; Refresh(); };
+                side.Children.Add(box);
+                Grid.SetColumn(side, 1);
+                row.Children.Add(side);
+                side.Visibility = item.CanBuild ? Visibility.Visible : Visibility.Collapsed;
+
+                var border = new Border { Child = row, Padding = new Thickness(4, 2, 4, 2), CornerRadius = new CornerRadius(3), Cursor = Cursors.Hand };
+                border.MouseLeftButtonDown += (s, e) => { SelectItem(captured); Refresh(); };
+                _itemRows[item] = border;
+                panel.Children.Add(border);
+            }
+            group.Content = new ScrollViewer
+            {
+                Content = panel, MaxHeight = 150,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            };
+            return group;
+        }
+
+        private void SelectItem(HostAnalysis item)
+        {
+            _selected = item;
+            foreach (var kv in _itemRows)
+                kv.Value.Background = kv.Key == item ? SelectedBrush : Brushes.Transparent;
+        }
+
+        private UIElement BuildLongitudinal()
+        {
+            var group = new GroupBox { Header = "Barras longitudinales corridas (por capas, de fuera hacia dentro)", Padding = new Thickness(4) };
+            var panel = new StackPanel();
+
+            foreach (bool top in new[] { true, false })
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = top ? "Cara superior" : "Cara inferior", FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(4, top ? 2 : 8, 4, 2)
+                });
+                var grid = new Grid { Margin = new Thickness(4, 0, 4, 0) };
+                foreach (double w in new[] { 52, 170, 190, 54, 60 })
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w) });
+                _layerGrid[top] = grid;
+                panel.Children.Add(grid);
+                var foot = new DockPanel { Margin = new Thickness(4, 0, 4, 0) };
+                var add = new Button { Content = "Anadir capa", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(0, 2, 8, 2), HorizontalAlignment = HorizontalAlignment.Left };
+                bool captured = top;
+                add.Click += (s, e) =>
+                {
+                    ReadLayerRows(captured, null);
+                    if (_layerStore[captured].Count >= 3) return;
+                    LayerCfg last = _layerStore[captured][_layerStore[captured].Count - 1].Clone();
+                    last.Count = 2;
+                    _layerStore[captured].Add(last);
+                    _building = true; RebuildLayerTable(captured); _building = false;
+                    Refresh();
+                };
+                _layerAdd[top] = add;
+                DockPanel.SetDock(add, Dock.Left);
+                foot.Children.Add(add);
+                var summary = new TextBlock { Foreground = RevitTheme.Muted, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+                _layerSummary[top] = summary;
+                foot.Children.Add(summary);
+                panel.Children.Add(foot);
+                RebuildLayerTable(top);
+            }
+
+            var form = FormGrid();
+            int r = 0;
+            _longStart = NumBox(_cfg.Longitudinal.StartExtensionMm);
+            AddRow(form, r++, "Prolongacion en el inicio (mm):", _longStart,
+                   "Cuanto sobresalen las barras corridas mas alla de la cara de inicio de la viga (anclaje en el apoyo). 0 = terminan en el recubrimiento del extremo.");
+            _longEnd = NumBox(_cfg.Longitudinal.EndExtensionMm);
+            AddRow(form, r++, "Prolongacion en el fin (mm):", _longEnd, "Idem en la cara final de la viga.");
+            _endCover = NumBox(_cfg.Longitudinal.EndCoverMm);
+            AddRow(form, r++, "Recubrimiento en extremos (mm):", _endCover, "Donde terminan las barras (corridas y bastones sin anclaje) cuando no se prolongan mas alla de la cara.");
+            var legRow = new StackPanel { Orientation = Orientation.Horizontal };
+            _leg = NumBox(_cfg.Longitudinal.LegMm);
+            _legStart = new CheckBox { Content = "en el inicio", IsChecked = _cfg.Longitudinal.LegAtStart, Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
+            _legEnd = new CheckBox { Content = "en el fin", IsChecked = _cfg.Longitudinal.LegAtEnd, Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
+            legRow.Children.Add(_leg); legRow.Children.Add(_legStart); legRow.Children.Add(_legEnd);
+            Hook(_legStart); Hook(_legEnd);
+            AddRow(form, r++, "Patilla a 90 grados (mm):", legRow,
+                   "Patilla en los extremos prolongados: las barras superiores doblan hacia abajo y las inferiores hacia arriba (gancho estandar " +
+                   "dentro del apoyo). Necesita prolongacion mayor que 0 en ese extremo. 0 = sin patilla.");
+            _layerClear = NumBox(_cfg.Longitudinal.LayerClearMm);
+            AddRow(form, r++, "Separacion libre entre capas (mm):", _layerClear, "Hueco libre entre una capa y la siguiente de la misma cara (25 mm o un diametro segun norma).");
+            _minClear = NumBox(_cfg.Longitudinal.MinClearMm);
+            AddRow(form, r++, "Separacion libre minima (mm):", _minClear, "Hueco libre minimo entre barras de una misma capa (ademas nunca menor que un diametro). Si no se cumple, se avisa.");
+            form.Margin = new Thickness(0, 6, 0, 0);
+            panel.Children.Add(form);
+
+            _ownCaption = new TextBlock { Margin = new Thickness(4, 6, 4, 2), FontWeight = FontWeights.SemiBold };
+            panel.Children.Add(_ownCaption);
+            _ownGrid = new Grid { Margin = new Thickness(4, 0, 4, 2) };
+            panel.Children.Add(_ownGrid);
+            group.Content = panel;
+            return group;
+        }
+
+        private void RebuildLayerTable(bool top)
+        {
+            Grid grid = _layerGrid[top];
+            grid.Children.Clear();
+            grid.RowDefinitions.Clear();
+            _layerRows[top].Clear();
+            string[] headers = { "Capa", "Barras extremas", "Barras intermedias", "Total", "" };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (int c = 0; c < headers.Length; c++)
+            {
+                var h = new TextBlock { Text = headers[c], Foreground = RevitTheme.Muted, Margin = Pad };
+                Grid.SetRow(h, 0); Grid.SetColumn(h, c);
+                grid.Children.Add(h);
+            }
+            List<LayerCfg> store = _layerStore[top];
+            for (int i = 0; i < store.Count; i++)
+            {
+                LayerCfg cfg = store[i];
+                int r = grid.RowDefinitions.Count;
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var row = new LayerRow { Cfg = cfg };
+                var name = new TextBlock
+                {
+                    Text = (top ? "S" : "I") + (i + 1), Margin = Pad, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold,
+                    ToolTip = i == 0 ? "Capa pegada al estribo: sus dos barras extremas son las esquinas" : "Capa " + (i + 1) + ", apilada por dentro de la anterior con la separacion libre entre capas"
+                };
+                Put(grid, name, r, 0);
+                row.Corner = TypeCombo(cfg.BarTypeName);
+                row.Corner.ToolTip = "Tipo de barra de las dos barras extremas de la capa (en la capa 1, las esquinas del estribo).";
+                Put(grid, row.Corner, r, 1);
+                row.Inter = TypeCombo(cfg.IntermediateBarTypeName);
+                row.Inter.Items.Insert(0, SameAsCorner);
+                if (RebarGenerator.MatchName(_barTypes, cfg.IntermediateBarTypeName) == null) row.Inter.SelectedIndex = 0;
+                else row.Inter.SelectedIndex = row.Inter.SelectedIndex + 1;
+                row.Inter.ToolTip = "Tipo de barra de las intermedias de la capa (las que van entre las dos extremas). Puede ser otro diametro: \"2 de 3/4 + 1 de 5/8\".";
+                Put(grid, row.Inter, r, 2);
+                row.Count = CountBox(cfg.Count);
+                row.Count.ToolTip = i == 0 ? "Total de barras de la capa, extremas incluidas (minimo 2)" : "Total de barras de la capa (0 = sin capa)";
+                Put(grid, row.Count, r, 3);
+                Hook(row.Corner); Hook(row.Inter); Hook(row.Count);
+                if (i > 0)
+                {
+                    var remove = new Button { Content = "Quitar", Padding = new Thickness(6, 1, 6, 1), Margin = Pad };
+                    LayerCfg captured = cfg;
+                    remove.Click += (s, e) =>
+                    {
+                        ReadLayerRows(top, null);
+                        _layerStore[top].Remove(captured);
+                        _building = true; RebuildLayerTable(top); _building = false;
+                        Refresh();
+                    };
+                    Put(grid, remove, r, 4);
+                }
+                _layerRows[top].Add(row);
+            }
+            if (_layerAdd.TryGetValue(top, out Button add)) add.IsEnabled = store.Count < 3;
+        }
+
+        /// <summary>Vuelca la tabla de capas de una cara en su almacen. errors puede ser null (lectura tolerante).</summary>
+        private void ReadLayerRows(bool top, List<string> errors)
+        {
+            int i = 0;
+            foreach (LayerRow row in _layerRows[top])
+            {
+                i++;
+                LayerCfg c = row.Cfg;
+                c.BarTypeName = TypeOf(row.Corner);
+                c.IntermediateBarTypeName = row.Inter.SelectedIndex <= 0 ? "" : TypeOf(row.Inter);
+                string name = "capa " + (top ? "S" : "I") + i;
+                int min = i == 1 ? 2 : 0;
+                if (int.TryParse(row.Count.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= min)
+                {
+                    c.Count = n;
+                    row.Count.ClearValue(Control.BorderBrushProperty);
+                }
+                else
+                {
+                    errors?.Add(name + ": numero de barras no valido (minimo " + min + ")");
+                    row.Count.BorderBrush = RevitTheme.Error;
+                }
+            }
+        }
+
+        private static TextBox CountBox(int v) => new TextBox { Text = v.ToString(CultureInfo.InvariantCulture), Width = 44, Margin = Pad };
+
+        /// <summary>
+        /// Reconstruye (si cambia la viga o su numero de capas) o actualiza el cuadro de
+        /// barras por capa de la viga seleccionada: una entrada por capa configurada de cada
+        /// cara. Vacio = el general; con valor, esa viga lleva ese numero de barras en esa capa.
+        /// </summary>
+        private void RefreshOwn(BeamPlan plan)
+        {
+            HostAnalysis item = _selected != null && _selected.CanBuild ? _selected : null;
+            int nt = _layerStore[true].Count, nb = _layerStore[false].Count;
+            bool rebuild = !ReferenceEquals(_ownFor, item) || _ownTop != nt || _ownBottom != nb;
+            _refreshingOwn = true;
+            try
+            {
+                if (rebuild)
+                {
+                    _ownFor = item; _ownTop = nt; _ownBottom = nb;
+                    _ownRows.Clear();
+                    _ownGrid.Children.Clear();
+                    _ownGrid.RowDefinitions.Clear();
+                    _ownGrid.ColumnDefinitions.Clear();
+                    _ownCaption.Text = item == null ? "Barras por capa de la viga seleccionada: selecciona una viga armable en la lista"
+                        : "Barras por capa de " + item.Tag.Trim() + " (vacio = el general de arriba; con valor, solo esta viga)";
+                    if (item == null) return;
+                    foreach (double w in new[] { 150, 50, 70, 150, 50, 70 })
+                        _ownGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w) });
+                    int rows = Math.Max(nt, nb);
+                    for (int i = 0; i < rows; i++)
+                    {
+                        _ownGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                        foreach (bool top in new[] { true, false })
+                        {
+                            int count = top ? nt : nb;
+                            if (i >= count) continue;
+                            int col = top ? 0 : 3;
+                            int idx = i + 1;
+                            var lb = new TextBlock { Text = (top ? "S" : "I") + idx + " (" + (top ? "superior" : "inferior") + " capa " + idx + ")", Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
+                            Put(_ownGrid, lb, i, col);
+                            var box = new TextBox { Width = 44, Margin = Pad, ToolTip = "Barras de esta capa solo en esta viga; vacio = el general" };
+                            Put(_ownGrid, box, i, col + 1);
+                            bool t = top;
+                            box.TextChanged += (s, e) =>
+                            {
+                                if (_refreshingOwn) return;
+                                string txt = box.Text.Trim();
+                                if (txt.Length == 0) item.SetOwn(t, idx, -1);
+                                else if (int.TryParse(txt, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 0) item.SetOwn(t, idx, n);
+                                Refresh();
+                            };
+                            var reset = new Button { Content = "general", Padding = new Thickness(6, 1, 6, 1), Margin = Pad, ToolTip = "Volver al numero general de barras de esta capa" };
+                            reset.Click += (s, e) => { item.SetOwn(t, idx, -1); Refresh(); };
+                            Put(_ownGrid, reset, i, col + 2);
+                            _ownRows.Add((top, idx, box));
+                        }
+                    }
+                }
+                if (item == null) return;
+                foreach ((bool top, int index, TextBox box) in _ownRows)
+                {
+                    int own = item.Own(top, index);
+                    if (!box.IsFocused) box.Text = own < 0 ? "" : own.ToString(CultureInfo.InvariantCulture);
+                    box.Background = own >= 0 ? RevitTheme.OwnValue : RevitTheme.Input;
+                    if (own >= 0 && index == 1 && own < 2) { box.Background = RevitTheme.Invalid; box.ToolTip = "La capa 1 lleva al menos 2 barras: se usan 2"; }
+                    else box.ToolTip = "Barras de esta capa solo en esta viga; vacio = el general (" + (index <= _layerStore[top].Count ? _layerStore[top][index - 1].Count : 0) + ")";
+                }
+            }
+            finally { _refreshingOwn = false; }
+        }
+
+        private UIElement BuildBastones()
+        {
+            var group = new GroupBox { Header = "Bastones (refuerzos cortos arriba o abajo: en los apoyos, en el centro o en un tramo)", Padding = new Thickness(4) };
+            var panel = new StackPanel();
+            _bastonGrid = new Grid();
+            for (int c = 0; c < 10; c++)
+                _bastonGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _bastonGrid.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
+            panel.Children.Add(_bastonGrid);
+            RebuildBastonTable();
+
+            var add = new Button { Content = "Anadir baston", Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(4, 6, 4, 2), HorizontalAlignment = HorizontalAlignment.Left };
+            add.Click += (s, e) =>
+            {
+                ReadBastonRows(null);
+                BastonCfg last = _bastonStore.Count > 0 ? _bastonStore[_bastonStore.Count - 1].Clone() : new BastonCfg();
+                if (_bastonStore.Count == 0 && _layerStore[true].Count > 0) last.BarTypeName = _layerStore[true][0].BarTypeName;
+                _bastonStore.Add(last);
+                _building = true; RebuildBastonTable(); _building = false;
+                Refresh();
+            };
+            panel.Children.Add(add);
+            _bastonMessage = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 2, 4, 0), Foreground = RevitTheme.Error };
+            panel.Children.Add(_bastonMessage);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Cada baston va en la cara superior o inferior, en la capa que se indique o en la primera en la que quepa (en los " +
+                       "huecos entre las barras corridas de esa capa, de forma simetrica; si no cabe, en una capa nueva por dentro). " +
+                       "Longitud en mm, en metros (menor de 5) o como fraccion de la viga (L/4, 0.3L): en inicio/fin/ambos se mide " +
+                       "desde la cara del apoyo hacia el vano y el anclaje sigue dentro del apoyo; en centro es la longitud total " +
+                       "centrada en el vano; en tramo se escriben desde y hasta desde la cara de inicio.",
+                TextWrapping = TextWrapping.Wrap, Foreground = RevitTheme.Muted, Margin = new Thickness(4, 4, 4, 0)
+            });
+            group.Content = panel;
+            return group;
+        }
+
+        private void RebuildBastonTable()
+        {
+            _bastonGrid.Children.Clear();
+            _bastonGrid.RowDefinitions.Clear();
+            _bastonRows.Clear();
+
+            string[] headers = { "Cara", "Posicion", "Tipo de barra", "Barras", "Capa", "Longitud", "Anclaje (mm)", "Desde (mm)", "Hasta (mm)", "" };
+            _bastonGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (int c = 0; c < headers.Length; c++)
+            {
+                var h = new TextBlock { Text = headers[c], Foreground = RevitTheme.Muted, Margin = Pad };
+                Grid.SetRow(h, 0); Grid.SetColumn(h, c);
+                _bastonGrid.Children.Add(h);
+            }
+            if (_bastonStore.Count == 0)
+            {
+                _bastonGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var none = new TextBlock { Text = "Sin bastones. Pulsa \"Anadir baston\" para crear uno.", Foreground = RevitTheme.Muted, Margin = Pad };
+                Grid.SetRow(none, 1); Grid.SetColumn(none, 0); Grid.SetColumnSpan(none, 10);
+                _bastonGrid.Children.Add(none);
+            }
+
+            int i = 0;
+            foreach (BastonCfg cfg in _bastonStore)
+            {
+                i++;
+                int r = _bastonGrid.RowDefinitions.Count;
+                _bastonGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var row = new BastonRow { Cfg = cfg };
+
+                row.Face = new ComboBox { Margin = Pad, MinWidth = 80, ToolTip = "Baston " + i };
+                row.Face.Items.Add("Superior");
+                row.Face.Items.Add("Inferior");
+                row.Face.SelectedIndex = cfg.IsTop ? 0 : 1;
+                Put(_bastonGrid, row.Face, r, 0);
+
+                row.Position = new ComboBox { Margin = Pad, MinWidth = 120 };
+                foreach (string l in BastonCfg.PositionLabels) row.Position.Items.Add(l);
+                row.Position.SelectedIndex = cfg.PositionIndex;
+                Put(_bastonGrid, row.Position, r, 1);
+
+                row.Type = TypeCombo(cfg.BarTypeName);
+                row.Type.MinWidth = 120;
+                Put(_bastonGrid, row.Type, r, 2);
+
+                row.Count = CountBox(cfg.Count);
+                row.Count.ToolTip = "Numero de barras del baston en la seccion";
+                Put(_bastonGrid, row.Count, r, 3);
+
+                row.Layer = new ComboBox { Margin = Pad, MinWidth = 90 };
+                foreach (string l in LayerLabels) row.Layer.Items.Add(l);
+                row.Layer.SelectedIndex = cfg.LayerIndex;
+                row.Layer.ToolTip = "Capa en la que va el baston: automatica = la primera en la que quepa";
+                Put(_bastonGrid, row.Layer, r, 4);
+
+                row.Length = new TextBox { Text = cfg.Length, Width = 64, Margin = Pad, ToolTip = "mm, metros (menor de 5) o fraccion de la viga: L/4, 0.3L" };
+                Put(_bastonGrid, row.Length, r, 5);
+
+                row.Anchor = NumBox(cfg.AnchorMm);
+                row.Anchor.Width = 64;
+                row.Anchor.ToolTip = "Inicio/fin/ambos: cuanto sigue el baston dentro del apoyo, mas alla de la cara de la viga. 0 = empieza en el recubrimiento del extremo";
+                Put(_bastonGrid, row.Anchor, r, 6);
+
+                row.From = NumBox(cfg.FromMm);
+                row.From.Width = 64;
+                Put(_bastonGrid, row.From, r, 7);
+                row.To = NumBox(cfg.ToMm);
+                row.To.Width = 64;
+                Put(_bastonGrid, row.To, r, 8);
+
+                var remove = new Button { Content = "Quitar", Padding = new Thickness(8, 2, 8, 2), Margin = Pad };
+                BastonCfg captured = cfg;
+                remove.Click += (s, e) =>
+                {
+                    ReadBastonRows(null);
+                    _bastonStore.Remove(captured);
+                    _building = true; RebuildBastonTable(); _building = false;
+                    Refresh();
+                };
+                Put(_bastonGrid, remove, r, 9);
+
+                BastonRow rowRef = row;
+                row.Position.SelectionChanged += (s, e) => UpdateBastonRowState(rowRef);
+                foreach (FrameworkElement fe in new FrameworkElement[] { row.Face, row.Position, row.Type, row.Count, row.Layer, row.Length, row.Anchor, row.From, row.To })
+                    Hook(fe);
+                UpdateBastonRowState(row);
+                _bastonRows.Add(row);
+            }
+        }
+
+        private static void UpdateBastonRowState(BastonRow row)
+        {
+            int p = row.Position.SelectedIndex;
+            bool ends = p == 0 || p == 1 || p == 2, custom = p == 4;
+            row.Length.IsEnabled = !custom;
+            row.Anchor.IsEnabled = ends;
+            row.From.IsEnabled = custom;
+            row.To.IsEnabled = custom;
+        }
+
+        /// <summary>Vuelca la tabla de bastones en su almacen. errors puede ser null (lectura tolerante); requireTypes = exigir tipo de barra.</summary>
+        private void ReadBastonRows(List<string> errors, bool requireTypes = false)
+        {
+            int i = 0;
+            foreach (BastonRow row in _bastonRows)
+            {
+                i++;
+                BastonCfg c = row.Cfg;
+                string name = "baston " + i;
+                c.Face = row.Face.SelectedIndex == 1 ? "bottom" : "top";
+                c.Position = BastonCfg.Positions[Math.Max(0, Math.Min(4, row.Position.SelectedIndex))];
+                c.BarTypeName = TypeOf(row.Type);
+                if (c.BarTypeName.Length == 0 && requireTypes) errors?.Add(name + ": elige un tipo de barra");
+                c.Layer = row.Layer.SelectedIndex <= 0 ? "auto" : row.Layer.SelectedIndex.ToString(CultureInfo.InvariantCulture);
+                if (int.TryParse(row.Count.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 1)
+                { c.Count = n; row.Count.ClearValue(Control.BorderBrushProperty); }
+                else { errors?.Add(name + ": numero de barras no valido"); row.Count.BorderBrush = RevitTheme.Error; }
+                c.Length = row.Length.Text.Trim();
+                if (row.Length.IsEnabled && !StirrupLayout.TryLength(c.Length, 1000, out _, out string lerr))
+                { errors?.Add(name + ": " + lerr); row.Length.BorderBrush = RevitTheme.Error; }
+                else row.Length.ClearValue(Control.BorderBrushProperty);
+                c.AnchorMm = ReadNum(row.Anchor, name + ": anclaje", 0, row.Anchor.IsEnabled ? errors : null);
+                c.FromMm = ReadNum(row.From, name + ": desde", 0, row.From.IsEnabled ? errors : null);
+                c.ToMm = ReadNum(row.To, name + ": hasta", 0, row.To.IsEnabled ? errors : null);
+                if (row.To.IsEnabled && c.ToMm <= c.FromMm) { errors?.Add(name + ": \"hasta\" tiene que ser mayor que \"desde\""); row.To.BorderBrush = RevitTheme.Error; }
+            }
+        }
+
+        private UIElement BuildStirrups()
+        {
+            var group = new GroupBox { Header = "Estribos (uno rectangular cerrado en el alma)", Padding = new Thickness(4) };
+            var grid = FormGrid();
+            int r = 0;
+            _stType = TypeCombo(_cfg.Stirrups.BarTypeName);
+            AddRow(grid, r++, "Tipo de barra:", _stType, "Tipo de barra de los estribos.");
+            _stHook = HookCombo(_cfg.Stirrups.HookTypeName);
+            AddRow(grid, r++, "Gancho:", _stHook, "Tipo de gancho (RebarHookType) en los dos extremos del estribo, normalmente 135 grados. Sin gancho = estribo cerrado sin ganchos.");
+            _stOrient = OrientCombo(_cfg.HookLeft);
+            AddRow(grid, r++, "Giro del gancho:", _stOrient,
+                   "Lado hacia el que giran los ganchos. Si con la orientacion elegida quedan fuera del hormigon, el plugin la invierte solo y lo avisa.");
+            _stDist = new TextBox { Text = _cfg.Stirrups.Distribution, Margin = Pad };
+            AddRow(grid, r++, "Distribucion desde cada apoyo:", _stDist,
+                   "Como en los planos: \"1@50, 8@100, R@200\" = el primero a 50 mm de la cara del apoyo, ocho mas cada 100 mm y el resto cada 200 mm " +
+                   "como maximo (repartidos por igual). Valores menores de 5 se leen en metros (\"1@.05\"). Cada viga puede tener la suya en la lista de arriba.");
+            _stSym = new CheckBox { Content = "Repetir los grupos desde el otro apoyo (confinamiento en los dos extremos)", IsChecked = _cfg.Stirrups.Symmetric, Margin = Pad };
+            AddRow(grid, r++, "", _stSym, "Con la casilla marcada, los grupos fijos (1@50, 8@100...) se colocan tambien desde el final en espejo y el resto va en medio.");
+            _stStartOff = NumBox(_cfg.Stirrups.StartOffsetMm);
+            AddRow(grid, r++, "Desfase en el inicio (mm):", _stStartOff, "La distribucion empieza a contar desde la cara de inicio mas este desfase (por ejemplo media columna si la viga esta modelada de eje a eje).");
+            _stEndOff = NumBox(_cfg.Stirrups.EndOffsetMm);
+            AddRow(grid, r++, "Desfase en el fin (mm):", _stEndOff, "La distribucion termina en la cara final menos este desfase.");
+            group.Content = grid;
+            return group;
+        }
+
+        private UIElement BuildGeneral()
+        {
+            var group = new GroupBox { Header = "Recubrimiento, geometria unida y particion", Padding = new Thickness(4) };
+            var grid = FormGrid();
+            int r = 0;
+            _cover = NumBox(_cfg.CoverMm);
+            AddRow(grid, r++, "Recubrimiento al estribo (mm):", _cover, "Distancia de cada cara del alma al borde exterior del estribo.");
+            _joined = new ComboBox { Margin = Pad };
+            _joined.Items.Add("Auto: seccion completa de la familia, longitud del solido cortado");
+            _joined.Items.Add("Solo el solido cortado (tal como lo ve Revit)");
+            _joined.Items.Add("Geometria completa de la familia (tambien en longitud)");
+            _joined.SelectedIndex = _cfg.JoinedIndex;
+            _joined.SelectionChanged += (s, e) =>
+            {
+                if (_building) return;
+                AppConfig scratch = ReadConfig(out _);
+                foreach (HostAnalysis item in _items) item.Reanalyze(_doc, scratch);
+                if (_selected == null || !_selected.CanBuild) _selected = _items.FirstOrDefault(i => i.CanBuild);
+                if (_selected != null) SelectItem(_selected);
+                foreach (var kv in _itemRuns) kv.Value.kind.Text = kv.Key.Kind + ": ";
+                Refresh();
+            };
+            AddRow(grid, r++, "Viga unida a otros elementos:", _joined,
+                   "Que geometria usar cuando columnas o losas le quitan hormigon a la viga (Unir geometria o recorte). Auto: la seccion se lee de la " +
+                   "geometria completa de la familia (todo el canto aunque la losa lo tape) y la longitud del solido cortado (entre caras de columna). " +
+                   "Al cambiarlo se vuelven a leer todas las vigas.");
+            _partition = new TextBox { Text = _cfg.PartitionTemplate, Margin = Pad };
+            AddRow(grid, r++, "Particion:", _partition, "Plantilla del parametro Particion de cada barra. Comodines: " + PartitionName.Help);
+            _partitionPreview = new TextBlock { Foreground = RevitTheme.Muted, Margin = Pad, TextWrapping = TextWrapping.Wrap };
+            AddRow(grid, r++, "", _partitionPreview, null);
+            group.Content = grid;
+            return group;
+        }
+
+        private UIElement BuildPreviews()
+        {
+            var grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1.3, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var secGroup = new GroupBox { Header = "Seccion (rueda: zoom, arrastrar: mover, doble clic: encajar)", Padding = new Thickness(4) };
+            var secPanel = new DockPanel();
+            _previewCaption = new TextBlock { Foreground = RevitTheme.Muted, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
+            DockPanel.SetDock(_previewCaption, Dock.Top);
+            secPanel.Children.Add(_previewCaption);
+            var legend = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+            LegendItem(legend, SectionPreview.CornerBrush, "barra extrema de capa");
+            LegendItem(legend, SectionPreview.IntermediateBrush, "barra intermedia");
+            LegendItem(legend, SectionPreview.BastonBrush, "baston");
+            LegendItem(legend, SectionPreview.StirrupBrush, "estribo (con sus ganchos)");
+            DockPanel.SetDock(legend, Dock.Bottom);
+            secPanel.Children.Add(legend);
+            _preview = new SectionPreview { MinHeight = 200 };
+            secPanel.Children.Add(new Border { BorderBrush = RevitTheme.Border, BorderThickness = new Thickness(1), Child = _preview });
+            secGroup.Content = secPanel;
+            Grid.SetRow(secGroup, 0);
+            grid.Children.Add(secGroup);
+
+            var elvGroup = new GroupBox { Header = "Alzado: tramos, barras corridas, bastones y estribos", Padding = new Thickness(4), Margin = new Thickness(0, 6, 0, 0) };
+            _elevation = new ElevationPreview { MinHeight = 150 };
+            elvGroup.Content = new Border { BorderBrush = RevitTheme.Border, BorderThickness = new Thickness(1), Child = _elevation };
+            Grid.SetRow(elvGroup, 1);
+            grid.Children.Add(elvGroup);
+            return grid;
+        }
+
+        private static void LegendItem(Panel panel, Brush brush, string text)
+        {
+            var sp = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 12, 0) };
+            sp.Children.Add(new System.Windows.Shapes.Rectangle { Width = 12, Height = 12, Fill = brush, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
+            panel.Children.Add(sp);
+        }
+
+        private UIElement BuildButtons()
+        {
+            var panel = new DockPanel();
+            _message = new TextBlock { Foreground = RevitTheme.Error, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            DockPanel.SetDock(buttons, Dock.Right);
+
+            var save = new Button { Content = "Guardar como valores por defecto", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(4, 0, 4, 0) };
+            save.ToolTip = "Guarda lo elegido en config.json (" + AppConfig.ConfigPath() + ") para las proximas veces.";
+            save.Click += (s, e) =>
+            {
+                AppConfig c = ReadConfig(out string err);
+                if (err != null) { _message.Foreground = RevitTheme.Error; _message.Text = err; return; }
+                try { c.Save(); _message.Foreground = RevitTheme.Ok; _message.Text = "Guardado en " + AppConfig.ConfigPath(); }
+                catch (Exception ex) { _message.Foreground = RevitTheme.Error; _message.Text = "No se pudo guardar: " + ex.Message; }
+            };
+            buttons.Children.Add(save);
+
+            _buildButton = new Button { Content = "Armar", Padding = new Thickness(16, 4, 16, 4), Margin = new Thickness(4, 0, 4, 0), FontWeight = FontWeights.SemiBold, IsDefault = true };
+            _buildButton.Click += (s, e) => OnBuild();
+            buttons.Children.Add(_buildButton);
+
+            var cancel = new Button { Content = "Cancelar", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(4, 0, 0, 0), IsCancel = true };
+            buttons.Children.Add(cancel);
+
+            panel.Children.Add(buttons);
+            panel.Children.Add(_message);
+            return panel;
+        }
+
+        // ------------------------------------------------------------------
+        // Controles auxiliares
+        // ------------------------------------------------------------------
+        private static Grid FormGrid()
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            return grid;
+        }
+
+        private static void Put(Grid grid, UIElement el, int r, int c)
+        {
+            Grid.SetRow(el, r); Grid.SetColumn(el, c);
+            grid.Children.Add(el);
+        }
+
+        private void AddRow(Grid grid, int row, string label, FrameworkElement control, string tip)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var lb = new TextBlock { Text = label, Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetRow(lb, row); Grid.SetColumn(lb, 0);
+            grid.Children.Add(lb);
+            if (tip != null) { control.ToolTip = tip; lb.ToolTip = tip; }
+            control.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetRow(control, row); Grid.SetColumn(control, 1);
+            grid.Children.Add(control);
+            Hook(control);
+        }
+
+        private void Hook(FrameworkElement c)
+        {
+            if (c is TextBox tb) tb.TextChanged += (s, e) => Refresh();
+            else if (c is ComboBox cb) cb.SelectionChanged += (s, e) => Refresh();
+            else if (c is CheckBox ck) { ck.Checked += (s, e) => Refresh(); ck.Unchecked += (s, e) => Refresh(); }
+        }
+
+        private static string Num(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+        private static TextBox NumBox(double v) => new TextBox { Text = Num(v), Width = 80, HorizontalAlignment = HorizontalAlignment.Left, Margin = Pad };
+
+        private string TypeDisplay(string name) =>
+            _diametersMm.TryGetValue(name, out double mm) ? name + " (" + Num(mm) + " mm)" : name;
+
+        private ComboBox TypeCombo(string current)
+        {
+            var cb = new ComboBox { Margin = Pad };
+            foreach (string n in _barTypes) cb.Items.Add(TypeDisplay(n));
+            string match = RebarGenerator.MatchName(_barTypes, current);
+            cb.SelectedIndex = match == null ? -1 : _barTypes.IndexOf(match);
+            return cb;
+        }
+
+        private string TypeOf(ComboBox cb) =>
+            cb.SelectedItem is string d && _typeByDisplay.TryGetValue(d, out string n) ? n : "";
+
+        private ComboBox HookCombo(string current)
+        {
+            var cb = new ComboBox { Margin = Pad };
+            cb.Items.Add(NoHook);
+            foreach (string n in _hookTypes) cb.Items.Add(n);
+            string match = RebarGenerator.MatchName(_hookTypes, current);
+            cb.SelectedIndex = match == null ? 0 : _hookTypes.IndexOf(match) + 1;
+            return cb;
+        }
+
+        private static string HookOf(ComboBox cb) => cb.SelectedIndex <= 0 ? "" : (string)cb.SelectedItem;
+
+        /// <summary>Angulo en grados del tipo de gancho (0 = sin gancho).</summary>
+        private double HookAngle(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return 0;
+            string match = RebarGenerator.MatchName(_hookTypes, name);
+            if (match != null && _hookAngles.TryGetValue(match, out double deg) && deg > 0) return deg;
+            return 135;
+        }
+
+        private static ComboBox OrientCombo(bool left)
+        {
+            var cb = new ComboBox { Margin = Pad, Width = 140, HorizontalAlignment = HorizontalAlignment.Left };
+            cb.Items.Add("Izquierda");
+            cb.Items.Add("Derecha");
+            cb.SelectedIndex = left ? 0 : 1;
+            return cb;
+        }
+
+        private double DiameterFt(string typeName)
+        {
+            string match = RebarGenerator.MatchName(_barTypes, typeName);
+            return match != null && _diametersMm.TryGetValue(match, out double mm) ? BeamSection.Mm(mm) : 0;
+        }
+
+        // ------------------------------------------------------------------
+        // Lectura de la configuracion desde los controles
+        // ------------------------------------------------------------------
+        private AppConfig ReadConfig(out string error)
+        {
+            var errors = new List<string>();
+            AppConfig c = _cfg.Clone();
+
+            foreach (bool top in new[] { true, false })
+            {
+                ReadLayerRows(top, errors);
+                c.Face(top).Layers = _layerStore[top].Select(l => l.Clone()).ToList();
+            }
+            c.Longitudinal.StartExtensionMm = ReadNum(_longStart, "prolongacion en el inicio", 0, errors);
+            c.Longitudinal.EndExtensionMm = ReadNum(_longEnd, "prolongacion en el fin", 0, errors);
+            c.Longitudinal.EndCoverMm = ReadNum(_endCover, "recubrimiento en extremos", 0, errors);
+            c.Longitudinal.LegMm = ReadNum(_leg, "patilla", 0, errors);
+            c.Longitudinal.LegAtStart = _legStart.IsChecked == true;
+            c.Longitudinal.LegAtEnd = _legEnd.IsChecked == true;
+            c.Longitudinal.LayerClearMm = ReadNum(_layerClear, "separacion entre capas", 0, errors);
+            c.Longitudinal.MinClearMm = ReadNum(_minClear, "separacion libre minima", 0, errors);
+
+            ReadBastonRows(errors);
+            c.Bastones = _bastonStore.Select(b => b.Clone()).ToList();
+
+            c.Stirrups.BarTypeName = TypeOf(_stType);
+            c.Stirrups.HookTypeName = HookOf(_stHook);
+            c.Stirrups.HookOrientation = _stOrient.SelectedIndex == 1 ? "right" : "left";
+            c.Stirrups.Distribution = _stDist.Text.Trim();
+            if (StirrupLayout.Parse(c.Stirrups.Distribution, out string derr) == null) errors.Add("distribucion de estribos: " + derr);
+            c.Stirrups.Symmetric = _stSym.IsChecked == true;
+            c.Stirrups.StartOffsetMm = ReadNum(_stStartOff, "desfase en el inicio", 0, errors);
+            c.Stirrups.EndOffsetMm = ReadNum(_stEndOff, "desfase en el fin", 0, errors);
+
+            c.CoverMm = ReadNum(_cover, "recubrimiento", 0, errors);
+            c.JoinedGeometry = AppConfig.JoinedModes[Math.Max(0, Math.Min(2, _joined.SelectedIndex))];
+            c.PartitionTemplate = _partition.Text.Trim();
+            c.Normalize();
+
+            error = errors.Count == 0 ? null : string.Join(" | ", errors);
+            return c;
+        }
+
+        private static double ReadNum(TextBox tb, string label, double min, List<string> errors)
+        {
+            if (!StirrupLayout.TryNumber(tb.Text, out double v) || v < min)
+            {
+                errors?.Add(label + ": numero no valido" + (min > 0 ? " (minimo " + Num(min) + ")" : ""));
+                if (errors != null) tb.BorderBrush = RevitTheme.Error;
+                return min;
+            }
+            tb.ClearValue(Control.BorderBrushProperty);
+            return v;
+        }
+
+        /// <summary>Tipos de barra que faltan (obligatorios segun lo activado).</summary>
+        private List<string> MissingTypes(AppConfig c)
+        {
+            var missing = new List<string>();
+            foreach (bool top in new[] { true, false })
+                for (int i = 0; i < c.Face(top).Layers.Count; i++)
+                {
+                    LayerCfg l = c.Face(top).Layers[i];
+                    bool used = i == 0 || l.Count > 0 || _items.Any(it => it.Own(top, i + 1) > 0);
+                    if (used && string.IsNullOrEmpty(l.BarTypeName)) missing.Add("capa " + (top ? "S" : "I") + (i + 1));
+                }
+            if (string.IsNullOrEmpty(c.Stirrups.BarTypeName)) missing.Add("estribos");
+            for (int i = 0; i < c.Bastones.Count; i++)
+                if (string.IsNullOrEmpty(c.Bastones[i].BarTypeName)) missing.Add("baston " + (i + 1));
+            return missing;
+        }
+
+        private void MarkTypes(AppConfig c)
+        {
+            var combos = new List<(ComboBox cb, bool required)> { (_stType, true) };
+            foreach (bool top in new[] { true, false })
+                for (int i = 0; i < _layerRows[top].Count; i++)
+                {
+                    LayerCfg l = _layerRows[top][i].Cfg;
+                    bool used = i == 0 || l.Count > 0 || _items.Any(it => it.Own(top, i + 1) > 0);
+                    combos.Add((_layerRows[top][i].Corner, used));
+                }
+            foreach (BastonRow row in _bastonRows) combos.Add((row.Type, true));
+            foreach ((ComboBox cb, bool required) in combos)
+            {
+                if (_strictTypes && required && cb.SelectedIndex < 0) { cb.BorderBrush = RevitTheme.Error; cb.BorderThickness = new Thickness(2); }
+                else { cb.ClearValue(Control.BorderBrushProperty); cb.ClearValue(Control.BorderThicknessProperty); }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Actualizacion
+        // ------------------------------------------------------------------
+        private void Refresh()
+        {
+            if (_building) return;
+            AppConfig scratch = ReadConfig(out string error);
+            MarkTypes(scratch);
+
+            double ds = DiameterFt(scratch.Stirrups.BarTypeName);
+            // sin tipo elegido, se dibuja con un diametro orientativo para poder ver el esquema
+            double dsDraw = ds > 0 ? ds : BeamSection.Mm(9.5), dbFallback = BeamSection.Mm(16);
+            bool anyMissing = MissingTypes(scratch).Count > 0;
+
+            // estado de cada viga con esta configuracion
+            int ok = 0;
+            foreach (HostAnalysis item in _items)
+            {
+                bool good = ItemStatus(item, scratch, dsDraw, dbFallback, out string text, out _, out _, out _);
+                if (good) ok++;
+                if (_itemRuns.TryGetValue(item, out var runs))
+                {
+                    runs.kind.Text = item.Kind + ": ";
+                    runs.kind.Foreground = good ? RevitTheme.Ok : RevitTheme.Error;
+                    runs.detail.Text = text;
+                }
+            }
+            foreach (var kv in _distHints)
+            {
+                kv.Value.Text = "general: " + scratch.Stirrups.Distribution;
+                kv.Value.Visibility = string.IsNullOrEmpty(kv.Key.DistributionOverride) ? Visibility.Visible : Visibility.Hidden;
+            }
+            _buildButton.Content = "Armar " + ok + " elemento(s)";
+            _buildButton.IsEnabled = ok > 0 && error == null;
+
+            // esquema del elemento seleccionado
+            if (_selected != null && _selected.CanBuild)
+            {
+                ItemStatus(_selected, scratch, dsDraw, dbFallback, out string text, out BeamPlan plan, out List<StirrupRun> runs, out List<BastonRange> bastones);
+                _previewCaption.Text = _selected.Tag + _selected.Section.Describe() + (anyMissing ? "  (sin tipo de barra elegido en algo: diametros orientativos)" : "");
+                double hookDeg = HookAngle(scratch.Stirrups.HookTypeName);
+                RefreshOwn(plan != null && plan.Error == null ? plan : null);
+                foreach (bool top in new[] { true, false })
+                    _layerSummary[top].Text = plan == null || plan.Error != null ? "" :
+                        string.Join("   ", plan.LayersOf(top).Select(l => l.Name + ": " + BeamPlan.DescribeLayer(l)));
+                if (plan != null) _preview.Show(_selected.Section, plan, hookDeg); else _preview.Clear(text);
+                if (runs != null) _elevation.Show(_selected.Section, plan, runs, bastones, scratch); else _elevation.Clear(text);
+                _partitionPreview.Text = "Ejemplo: " + _selected.Partition(scratch, "estribo", "estribo");
+                var bmsgs = new List<string>();
+                if (bastones == null) RebarGenerator.BastonRanges(_selected.Section, scratch, out bmsgs);
+                if (plan != null) bmsgs.AddRange(plan.Warnings.Where(w => w.StartsWith("baston", StringComparison.OrdinalIgnoreCase)));
+                _bastonMessage.Text = string.Join(Environment.NewLine, bmsgs);
+            }
+            else
+            {
+                RefreshOwn(null);
+                foreach (bool top in new[] { true, false }) _layerSummary[top].Text = "";
+                _previewCaption.Text = "";
+                _preview.Clear("Sin elemento armable");
+                _elevation.Clear("");
+                _partitionPreview.Text = "";
+                _bastonMessage.Text = "";
+            }
+
+            if (error != null) { _message.Foreground = RevitTheme.Error; _message.Text = error; }
+            else if (_message.Foreground == RevitTheme.Error) _message.Text = "";
+        }
+
+        /// <summary>Estado de una viga con la configuracion dada: true si se puede armar, y el texto para su fila.</summary>
+        private bool ItemStatus(HostAnalysis item, AppConfig cfg, double ds, double dbFallback,
+                                out string text, out BeamPlan plan, out List<StirrupRun> runs, out List<BastonRange> bastones)
+        {
+            plan = null; runs = null; bastones = null;
+            if (!item.CanBuild) { text = item.Error; return false; }
+            try
+            {
+                plan = RebarGenerator.PlanFor(item, cfg, DiameterFt, ds, dbFallback);
+                if (plan.Error != null) { text = item.Section.Describe() + " -> SIN ARMAR: " + plan.Error; return false; }
+                runs = RebarGenerator.RunsFor(item, cfg, out string warn);
+                bastones = RebarGenerator.BastonRanges(item.Section, cfg, out List<string> berr);
+                int n = runs.Sum(r => r.Count);
+                text = item.Section.Describe() + "; " + plan.Describe() + " (" + plan.DescribeLayers() + "); " + n + " estribos" +
+                       (warn != null ? " (" + warn + ")" : "");
+                if (berr.Count > 0) { text += " -> SIN ARMAR: " + string.Join(" | ", berr); return false; }
+                return n > 0;
+            }
+            catch (Exception ex)
+            {
+                text = item.Section.Describe() + " -> SIN ARMAR: " + ex.Message;
+                return false;
+            }
+        }
+
+        private void OnBuild()
+        {
+            AppConfig c = ReadConfig(out string error);
+            if (error != null) { _message.Foreground = RevitTheme.Error; _message.Text = error; return; }
+            List<string> missing = MissingTypes(c);
+            if (missing.Count > 0)
+            {
+                _strictTypes = true;
+                MarkTypes(c);
+                _message.Foreground = RevitTheme.Error;
+                _message.Text = "Elige el tipo de barra de: " + string.Join(", ", missing) + ".";
+                return;
+            }
+            Result = c;
+            DialogResult = true;
+            Close();
+        }
+    }
+}
