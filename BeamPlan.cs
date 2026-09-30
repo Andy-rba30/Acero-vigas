@@ -24,6 +24,10 @@ namespace BeamRebar
         public BarKind Kind;
         /// <summary>Indice del baston en la lista de la configuracion; -1 en las barras corridas.</summary>
         public int Baston = -1;
+        /// <summary>Identidad estable de la barra en la seccion (cara, capa, clase, baston, orden en u): sirve para asignarle otro tipo viga a viga.</summary>
+        public string Key = "";
+        /// <summary>True si esta barra lleva un tipo asignado a mano en esta viga.</summary>
+        public bool Assigned;
 
         public double V(Rect web) => Top ? web.V2 - FaceOffset : web.V1 + FaceOffset;
         public Pt P(Rect web) => new Pt(U, V(web));
@@ -69,6 +73,8 @@ namespace BeamRebar
         public Func<string, double> Diameter;
         /// <summary>Barras propias de esta viga para (cara superior, capa 1..); -1 = el general.</summary>
         public Func<bool, int, int> CountOverride;
+        /// <summary>Tipo de barra asignado a mano a una barra concreta de esta viga (por su Key); null = el general.</summary>
+        public Func<string, string> TypeOverride;
         /// <summary>Diametro orientativo para dibujar las barras sin tipo elegido (0 = no se colocan).</summary>
         public double FallbackDb;
         public double Tol;
@@ -229,7 +235,11 @@ namespace BeamRebar
                     {
                         double v = vBot + freeH * k / (pairs + 1);
                         foreach (double u in new[] { inU1 + 0.5 * dbS, inU2 - 0.5 * dbS })
-                            plan.Bars.Add(new PlanBar { U = u, FaceOffset = v - plan.Web.V1, Db = dbS, TypeName = o.Sides.BarTypeName, Top = false, Layer = k, Kind = BarKind.Side });
+                        {
+                            var sb = new PlanBar { U = u, FaceOffset = v - plan.Web.V1, Db = dbS, TypeName = o.Sides.BarTypeName, Top = false, Layer = k, Kind = BarKind.Side };
+                            plan.Assign(sb);
+                            plan.Bars.Add(sb);
+                        }
                     }
                 }
             }
@@ -272,6 +282,7 @@ namespace BeamRebar
                 U = u, FaceOffset = layer.Outer + 0.5 * db, Db = db, TypeName = type ?? "", Top = layer.Top,
                 Layer = layer.Index, Kind = kind, Baston = baston
             };
+            Assign(bar);
             layer.Bars.Add(bar);
             Bars.Add(bar);
             return bar;
@@ -333,6 +344,22 @@ namespace BeamRebar
         /// cuenta las que faltan en "missing").
         /// </summary>
         private static double Opt_Dia(PlanOptions o, string name) => o.Dia(name);
+
+        /// <summary>Da a la barra su clave (orden entre las de su misma cara, capa, clase y baston) y aplica el tipo asignado a mano si lo hay.</summary>
+        private void Assign(PlanBar bar)
+        {
+            int ordinal = Bars.Count(b => b.Top == bar.Top && b.Layer == bar.Layer && b.Kind == bar.Kind && b.Baston == bar.Baston);
+            bar.Key = (bar.Top ? "S" : "I") + "|" + bar.Layer + "|" + (int)bar.Kind + "|" + bar.Baston + "|" + ordinal;
+            string t = Opt.TypeOverride?.Invoke(bar.Key);
+            if (string.IsNullOrEmpty(t)) return;
+            double d = Opt.Dia(t);
+            if (d <= 0) return;
+            // el eje se mueve para que la barra siga tangente a la superficie sobre la que apoya
+            bar.FaceOffset += 0.5 * (d - bar.Db);
+            bar.Db = d;
+            bar.TypeName = t;
+            bar.Assigned = true;
+        }
 
         private List<double> Fit(PlanLayer layer, int count, double db, double inU1, double inU2, bool force, out int missing)
         {

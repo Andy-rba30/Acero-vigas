@@ -25,6 +25,10 @@ namespace BeamRebar
         private BeamPlan _plan;
         private double _hookDeg;
         private string _message = "Sin elemento armable";
+        /// <summary>Claves de las barras seleccionadas con clic (para asignarles otro tipo).</summary>
+        public HashSet<string> Selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public event Action SelectionChanged;
+        private bool _clickedBar;
 
         private double _zoom = 1;
         private Vector _pan;
@@ -95,6 +99,7 @@ namespace BeamRebar
         private void OnDown(object sender, MouseButtonEventArgs e)
         {
             if (_s == null) return;
+            if (_clickedBar) { _clickedBar = false; return; }
             if (e.ClickCount == 2) { ResetView(); e.Handled = true; return; }
             _dragging = true; _dragStart = e.GetPosition(this); _panStart = _pan;
             CaptureMouse();
@@ -188,9 +193,23 @@ namespace BeamRebar
                 Pt p = bar.P(web);
                 var e = new Ellipse
                 {
-                    Width = 2 * rr, Height = 2 * rr, Fill = BrushOf(bar), Stroke = Brushes.Black, StrokeThickness = 0.6,
-                    ToolTip = bar.Label + ": " + bar.TypeName + " (" + Mm(bar.Db) + " mm) en u=" + Mm(p.U) + ", v=" + Mm(p.V) +
-                              " mm; a " + Mm(bar.FaceOffset) + " mm de la cara " + (bar.Top ? "superior" : "inferior")
+                    Width = 2 * rr, Height = 2 * rr, Fill = BrushOf(bar),
+                    Stroke = Selected.Contains(bar.Key) ? Brushes.Gold : bar.Assigned ? Brushes.Black : Brushes.Black,
+                    StrokeThickness = Selected.Contains(bar.Key) ? 2.5 : bar.Assigned ? 1.8 : 0.6,
+                    Cursor = Cursors.Arrow,
+                    ToolTip = bar.Label + ": " + bar.TypeName + " (" + Mm(bar.Db) + " mm)" + (bar.Assigned ? " [tipo asignado en esta viga]" : "") +
+                              " en u=" + Mm(p.U) + ", v=" + Mm(p.V) + " mm; a " + Mm(bar.FaceOffset) + " mm de la cara " + (bar.Top ? "superior" : "inferior") +
+                              ". Clic: seleccionar / quitar de la seleccion"
+                };
+                string key = bar.Key;
+                e.MouseLeftButtonDown += (sn, ev) =>
+                {
+                    _clickedBar = true;
+                    if (!Selected.Remove(key)) Selected.Add(key);
+                    ev.Handled = true;
+                    _clickedBar = false;
+                    Redraw();
+                    SelectionChanged?.Invoke();
                 };
                 SetLeft(e, X(p.U) - rr); SetTop(e, Y(p.V) - rr);
                 Children.Add(e);

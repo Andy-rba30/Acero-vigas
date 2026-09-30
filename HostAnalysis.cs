@@ -23,6 +23,8 @@ namespace BeamRebar
         public string DistributionOverride = "";
         /// <summary>Barras por capa propias de esta viga: clave "S1", "S2"... (superior) e "I1"... (inferior).</summary>
         public Dictionary<string, int> LayerOverrides = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Tipo de barra asignado a mano a barras concretas de esta viga (clave de PlanBar -> nombre del tipo).</summary>
+        public Dictionary<string, string> BarTypeOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public static string Key(bool top, int layer) => (top ? "S" : "I") + layer;
 

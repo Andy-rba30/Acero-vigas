@@ -51,12 +51,10 @@ namespace BeamRebar
         private CheckBox _legStart, _legEnd;
 
         // --- barras por capa de la viga seleccionada ---
-        private Grid _ownGrid;
-        private TextBlock _ownCaption;
-        private readonly List<(bool top, int index, TextBox count)> _ownRows = new List<(bool, int, TextBox)>();
-        private HostAnalysis _ownFor;
-        private int _ownTop, _ownBottom;
-        private bool _refreshingOwn;
+        // --- seleccion especial de barras (tipo asignado barra a barra en la viga seleccionada) ---
+        private TextBlock _selCaption, _selList;
+        private ComboBox _selType;
+        private Button _selAssign, _selClear;
 
         // --- bastones ---
         private sealed class BastonRow
@@ -241,6 +239,7 @@ namespace BeamRebar
 
         private void SelectItem(HostAnalysis item)
         {
+            if (!ReferenceEquals(_selected, item) && _preview != null) _preview.Selected.Clear();
             _selected = item;
             foreach (var kv in _itemRows)
                 kv.Value.Background = kv.Key == item ? SelectedBrush : Brushes.Transparent;
@@ -325,10 +324,43 @@ namespace BeamRebar
             form.Margin = new Thickness(0, 6, 0, 0);
             panel.Children.Add(form);
 
-            _ownCaption = new TextBlock { Margin = new Thickness(4, 6, 4, 2), FontWeight = FontWeights.SemiBold };
-            panel.Children.Add(_ownCaption);
-            _ownGrid = new Grid { Margin = new Thickness(4, 0, 4, 2) };
-            panel.Children.Add(_ownGrid);
+            _selCaption = new TextBlock { Margin = new Thickness(4, 8, 4, 2), FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
+            panel.Children.Add(_selCaption);
+            var selRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 0, 4, 0) };
+            _selType = TypeCombo("");
+            _selType.Width = 190;
+            _selType.ToolTip = "Tipo de barra que se asigna a las barras seleccionadas en el esquema de la seccion (solo en esta viga)";
+            selRow.Children.Add(_selType);
+            _selAssign = new Button { Content = "Asignar a la seleccion", Padding = new Thickness(8, 2, 8, 2), Margin = Pad };
+            _selAssign.Click += (s, e) =>
+            {
+                if (_selected == null || !_selected.CanBuild) return;
+                string t = TypeOf(_selType);
+                if (t.Length == 0) { _message.Foreground = RevitTheme.Error; _message.Text = "Elige el tipo de barra que quieres asignar a las barras seleccionadas."; return; }
+                foreach (string key in _preview.Selected) _selected.BarTypeOverrides[key] = t;
+                _preview.Selected.Clear();
+                Refresh();
+            };
+            selRow.Children.Add(_selAssign);
+            _selClear = new Button { Content = "Quitar asignacion", Padding = new Thickness(8, 2, 8, 2), Margin = Pad, ToolTip = "Las barras seleccionadas vuelven al tipo general de su capa (sin seleccion: todas las de esta viga)" };
+            _selClear.Click += (s, e) =>
+            {
+                if (_selected == null || !_selected.CanBuild) return;
+                if (_preview.Selected.Count == 0) _selected.BarTypeOverrides.Clear();
+                else foreach (string key in _preview.Selected) _selected.BarTypeOverrides.Remove(key);
+                _preview.Selected.Clear();
+                Refresh();
+            };
+            selRow.Children.Add(_selClear);
+            panel.Children.Add(selRow);
+            _selList = new TextBlock { Foreground = RevitTheme.Muted, Margin = new Thickness(4, 2, 4, 2), TextWrapping = TextWrapping.Wrap };
+            panel.Children.Add(_selList);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Haz clic en las barras del esquema de la seccion (se marcan en amarillo), elige un tipo y pulsa \"Asignar a la seleccion\": esas barras " +
+                       "llevan ese diametro solo en esta viga. Repite con otra seleccion para usar varios diametros. Las barras con tipo asignado se dibujan con borde grueso.",
+                TextWrapping = TextWrapping.Wrap, Foreground = RevitTheme.Muted, Margin = new Thickness(4, 2, 4, 0)
+            });
             group.Content = panel;
             return group;
         }
@@ -423,95 +455,19 @@ namespace BeamRebar
         /// barras por capa de la viga seleccionada: una entrada por capa configurada de cada
         /// cara. Vacio = el general; con valor, esa viga lleva ese numero de barras en esa capa.
         /// </summary>
-        private void RefreshOwn(BeamPlan plan)
+
+        /// <summary>Texto de la seleccion especial de barras de la viga seleccionada y de los tipos ya asignados.</summary>
+        private void RefreshSelection(BeamPlan plan)
         {
             HostAnalysis item = _selected != null && _selected.CanBuild ? _selected : null;
-            int nt = _layerStore[true].Count, nb = _layerStore[false].Count;
-            bool rebuild = !ReferenceEquals(_ownFor, item) || _ownTop != nt || _ownBottom != nb;
-            _refreshingOwn = true;
-            try
-            {
-                if (rebuild)
-                {
-                    _ownFor = item; _ownTop = nt; _ownBottom = nb;
-                    _ownRows.Clear();
-                    _ownGrid.Children.Clear();
-                    _ownGrid.RowDefinitions.Clear();
-                    _ownGrid.ColumnDefinitions.Clear();
-                    _ownCaption.Text = item == null ? "Barras por capa de la viga seleccionada: selecciona una viga armable en la lista"
-                        : "Barras por capa de " + item.Tag.Trim() + " (vacio = el general de arriba; con valor, solo esta viga)";
-                    if (item == null) return;
-                    foreach (double w in new[] { 150, 50, 70, 150, 50, 70 })
-                        _ownGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w) });
-                    int rows = Math.Max(nt, nb) + 1;
-                    for (int i = 0; i < rows; i++)
-                    {
-                        _ownGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                        foreach (bool top in new[] { true, false })
-                        {
-                            int count = top ? nt : nb;
-                            if (i == rows - 1)
-                            {
-                                if (!top) continue;
-                                var lbs = new TextBlock { Text = "Laterales (pares)", Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
-                                Put(_ownGrid, lbs, i, 0);
-                                var boxS = new TextBox { Width = 44, Margin = Pad, ToolTip = "Pares de barras laterales solo en esta viga; vacio = el general" };
-                                Put(_ownGrid, boxS, i, 1);
-                                boxS.TextChanged += (s, e) =>
-                                {
-                                    if (_refreshingOwn) return;
-                                    string txt = boxS.Text.Trim();
-                                    if (txt.Length == 0) item.SetOwnSide(-1);
-                                    else if (int.TryParse(txt, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 0) item.SetOwnSide(n);
-                                    Refresh();
-                                };
-                                var resetS = new Button { Content = "general", Padding = new Thickness(6, 1, 6, 1), Margin = Pad };
-                                resetS.Click += (s, e) => { item.SetOwnSide(-1); Refresh(); };
-                                Put(_ownGrid, resetS, i, 2);
-                                _ownRows.Add((true, 0, boxS));
-                                continue;
-                            }
-                            if (i >= count) continue;
-                            int col = top ? 0 : 3;
-                            int idx = i + 1;
-                            var lb = new TextBlock { Text = (top ? "S" : "I") + idx + " (" + (top ? "superior" : "inferior") + " capa " + idx + ")", Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
-                            Put(_ownGrid, lb, i, col);
-                            var box = new TextBox { Width = 44, Margin = Pad, ToolTip = "Barras de esta capa solo en esta viga; vacio = el general" };
-                            Put(_ownGrid, box, i, col + 1);
-                            bool t = top;
-                            box.TextChanged += (s, e) =>
-                            {
-                                if (_refreshingOwn) return;
-                                string txt = box.Text.Trim();
-                                if (txt.Length == 0) item.SetOwn(t, idx, -1);
-                                else if (int.TryParse(txt, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 0) item.SetOwn(t, idx, n);
-                                Refresh();
-                            };
-                            var reset = new Button { Content = "general", Padding = new Thickness(6, 1, 6, 1), Margin = Pad, ToolTip = "Volver al numero general de barras de esta capa" };
-                            reset.Click += (s, e) => { item.SetOwn(t, idx, -1); Refresh(); };
-                            Put(_ownGrid, reset, i, col + 2);
-                            _ownRows.Add((top, idx, box));
-                        }
-                    }
-                }
-                if (item == null) return;
-                foreach ((bool top, int index, TextBox box) in _ownRows)
-                {
-                    if (index == 0)
-                    {
-                        int ownS = item.OwnSide();
-                        if (!box.IsFocused) box.Text = ownS < 0 ? "" : ownS.ToString(CultureInfo.InvariantCulture);
-                        box.Background = ownS >= 0 ? RevitTheme.OwnValue : RevitTheme.Input;
-                        continue;
-                    }
-                    int own = item.Own(top, index);
-                    if (!box.IsFocused) box.Text = own < 0 ? "" : own.ToString(CultureInfo.InvariantCulture);
-                    box.Background = own >= 0 ? RevitTheme.OwnValue : RevitTheme.Input;
-                    if (own >= 0 && index == 1 && own < 2) { box.Background = RevitTheme.Invalid; box.ToolTip = "La capa 1 lleva al menos 2 barras: se usan 2"; }
-                    else box.ToolTip = "Barras de esta capa solo en esta viga; vacio = el general (" + (index <= _layerStore[top].Count ? _layerStore[top][index - 1].Count : 0) + ")";
-                }
-            }
-            finally { _refreshingOwn = false; }
+            bool ok = item != null && plan != null && plan.Error == null;
+            _selAssign.IsEnabled = ok && _preview.Selected.Count > 0;
+            _selClear.IsEnabled = ok && item.BarTypeOverrides.Count > 0;
+            if (!ok) { _selCaption.Text = "Seleccion especial de barras: selecciona una viga armable en la lista"; _selList.Text = ""; return; }
+            _selCaption.Text = "Seleccion especial de barras de " + item.Tag.Trim() + ": " + _preview.Selected.Count + " barra(s) seleccionada(s) en el esquema de la seccion";
+            var groups = plan.Bars.Where(b => b.Assigned).GroupBy(b => b.TypeName)
+                             .Select(g => g.Count() + " x " + g.Key + " (" + string.Join(", ", g.Select(b => b.Label).Distinct().Take(4)) + (g.Select(b => b.Label).Distinct().Count() > 4 ? "..." : "") + ")");
+            _selList.Text = item.BarTypeOverrides.Count == 0 ? "Sin tipos asignados a mano en esta viga." : "Asignados: " + string.Join(" | ", groups);
         }
 
         private UIElement BuildBastones()
@@ -774,6 +730,7 @@ namespace BeamRebar
             DockPanel.SetDock(legend, Dock.Bottom);
             secPanel.Children.Add(legend);
             _preview = new SectionPreview { MinHeight = 200 };
+            _preview.SelectionChanged += () => Refresh();
             secPanel.Children.Add(new Border { BorderBrush = RevitTheme.Border, BorderThickness = new Thickness(1), Child = _preview });
             secGroup.Content = secPanel;
             Grid.SetRow(secGroup, 0);
@@ -1061,7 +1018,7 @@ namespace BeamRebar
                 ItemStatus(_selected, scratch, dsDraw, dbFallback, out string text, out BeamPlan plan, out List<StirrupRun> runs, out List<BastonRange> bastones);
                 _previewCaption.Text = _selected.Tag + _selected.Section.Describe() + (anyMissing ? "  (sin tipo de barra elegido en algo: diametros orientativos)" : "");
                 double hookDeg = HookAngle(scratch.Stirrups.HookTypeName);
-                RefreshOwn(plan != null && plan.Error == null ? plan : null);
+                RefreshSelection(plan);
                 foreach (bool top in new[] { true, false })
                     _layerSummary[top].Text = plan == null || plan.Error != null ? "" :
                         string.Join("   ", plan.LayersOf(top).Where(l => l.Main > 0).Select(l => l.Name + ": " + BeamPlan.DescribeLayer(l, false)));
@@ -1076,7 +1033,7 @@ namespace BeamRebar
             }
             else
             {
-                RefreshOwn(null);
+                RefreshSelection(null);
                 foreach (bool top in new[] { true, false }) _layerSummary[top].Text = "";
                 _previewCaption.Text = "";
                 _preview.Clear("Sin elemento armable");

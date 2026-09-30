@@ -98,6 +98,7 @@ namespace BeamRebar
                     }
                 }
             for (int i = 0; i < cfg.Bastones.Count; i++) Type(cfg.Bastones[i].BarTypeName, "baston " + (i + 1));
+            foreach (string t in item.BarTypeOverrides.Values.Distinct(StringComparer.OrdinalIgnoreCase)) Type(t, "barras con tipo asignado");
             int sidePairs = item.OwnSide() >= 0 ? item.OwnSide() : cfg.SideBars.Pairs;
             if (sidePairs > 0) Type(cfg.SideBars.BarTypeName, "barras laterales");
             RebarBarType btStirrup = FindBarType(doc, cfg.Stirrups.BarTypeName, "estribos");
@@ -132,6 +133,7 @@ namespace BeamRebar
                 Top = cfg.TopBars, Bottom = cfg.BottomBars, Bastones = cfg.Bastones,
                 Diameter = diameter, CountOverride = (top, layer) => item.Own(top, layer),
                 Sides = cfg.SideBars, SideOverride = item.OwnSide(),
+                TypeOverride = key => item.BarTypeOverrides.TryGetValue(key, out string t) ? t : null,
                 FallbackDb = fallbackDb, Tol = Mm(cfg.PrismCheckToleranceMm)
             };
             return BeamPlan.Build(o);

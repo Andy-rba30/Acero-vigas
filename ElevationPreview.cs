@@ -65,7 +65,7 @@ namespace BeamRebar
             double total = L + left + right;
             double vLo = prof.VMin, vHi = prof.VMax;
             double depth = Math.Max(vHi - vLo, 1e-6);
-            double marginX = 30, marginTop = 30, marginBottom = 58;
+            double marginX = 30, marginTop = 30, marginBottom = 72;
             double kx = (W - 2 * marginX) / Math.Max(total, 1e-6);
             double ky = Math.Min((H - marginTop - marginBottom) / (depth + 2 * leg + 1e-6), 4 * kx);
             double x0 = marginX + left * kx;                     // x de la cara de inicio
@@ -93,15 +93,17 @@ namespace BeamRebar
                 Children.Add(new Line { X1 = X(seg.W0), Y1 = Y(vHi) - 6, X2 = X(seg.W0), Y2 = Y(vLo) + 6, Stroke = Brushes.Gray, StrokeThickness = 0.8, StrokeDashArray = new DoubleCollection { 3, 3 } });
                 Text(Mm(seg.W0), X(seg.W0) - 12, Y(vHi) - 20, Brushes.Gray, 9);
             }
-            Text("inicio", X(0) - 14, Y(vLo) + 4, Brushes.DimGray, 10);
-            Text("fin  " + (L * 0.3048).ToString("0.00", CultureInfo.InvariantCulture) + " m", X(L) - 30, Y(vLo) + 4, Brushes.DimGray, 10);
+            Text("inicio", X(0) - 30, Y(vHi) - 16, Brushes.DimGray, 10);
+            Text("fin  " + (L * 0.3048).ToString("0.00", CultureInfo.InvariantCulture) + " m", X(L) - 8, Y(vHi) - 16, Brushes.DimGray, 10);
             if (ky / kx > 1.05) Text("escala vertical x" + (ky / kx).ToString("0.#", CultureInfo.InvariantCulture), W - 110, 4, Brushes.Gray, 9);
 
             // estribos
             Brush sb = SectionPreview.StirrupBrush;
             double cover = _cfg.CoverMm / FtToMm;
+            int runIdx = 0;
             foreach (StirrupRun run in _runs)
             {
+                int lvl = runIdx++ % 3;   // las etiquetas de tramos cortos se escalonan en tres alturas para que no se pisen
                 foreach (double w in run.Stations())
                 {
                     Rect r = prof.WebAt(w);
@@ -109,7 +111,7 @@ namespace BeamRebar
                 }
                 // llave del tramo bajo la viga
                 double xa = X(run.W0), xb = X(run.W0 + run.Length);
-                double yb = Y(vLo) + 18;
+                double yb = Y(vLo) + 16 + lvl * 13;
                 Children.Add(new Line { X1 = xa, Y1 = yb, X2 = xb, Y2 = yb, Stroke = sb, StrokeThickness = 1 });
                 Children.Add(new Line { X1 = xa, Y1 = yb - 4, X2 = xa, Y2 = yb, Stroke = sb, StrokeThickness = 1 });
                 Children.Add(new Line { X1 = xb, Y1 = yb - 4, X2 = xb, Y2 = yb, Stroke = sb, StrokeThickness = 1 });

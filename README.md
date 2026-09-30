@@ -68,8 +68,9 @@ ninguna barra. Un cambio de sección en un tramo más corto que dos estaciones p
   barras**, un tipo para las dos **barras extremas** (en la capa 1, las esquinas del
   estribo, tangentes a sus ramas) y otro para las **intermedias**, repartidas por igual
   entre las extremas: así una capa puede ser "2 Ø3/4" + 1 Ø5/8"" y la segunda "2 Ø3/4"".
-  Hasta 3 capas por cara. En la ventana, cada viga puede cambiar el **número de barras
-  de cada capa** (0 en una capa 2 o 3 = sin esa capa en esa viga).
+  Hasta 3 capas por cara. Para un control más fino, en el esquema de la sección se
+  pueden **seleccionar barras con un clic y asignarles otro tipo** solo en esa viga
+  (repitiendo con otras selecciones para usar varios diámetros).
 - **Capa intermedia (barras laterales)**: pares simétricos de barras de alma, una en cada
   rama del estribo a la misma altura, repartidos por igual en el canto libre entre el
   paquete superior y el inferior (en el centro de la sección no va nada). Tipo de barra
