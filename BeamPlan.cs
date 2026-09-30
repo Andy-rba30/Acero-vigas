@@ -200,7 +200,7 @@ namespace BeamRebar
                     // barras de la cara que ocupan esa franja de altura: no se puede poner el baston encima
                     var blockers = new PlanLayer { Top = top, Index = 0, Outer = outerB };
                     foreach (PlanBar b in plan.Bars.Where(b => b.Top == top && !b.IsSide))
-                        if (b.FaceOffset + 0.5 * b.Db > outerB - tol && b.FaceOffset - 0.5 * b.Db < outerB + db + tol) blockers.Bars.Add(b);
+                        if (b.FaceOffset + 0.5 * b.Db > outerB + tol && b.FaceOffset - 0.5 * b.Db < outerB + db - tol) blockers.Bars.Add(b);
                     List<double> us = plan.Fit(blockers, cfg.Count, db, inU1, inU2, true, out int missing);
                     int idx = plan.LayersOf(top).Select(l => l.Index).DefaultIfEmpty(0).Max() + 1;
                     var layer = new PlanLayer { Top = top, Index = idx, Outer = outerB };

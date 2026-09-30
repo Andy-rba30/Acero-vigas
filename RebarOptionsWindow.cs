@@ -78,6 +78,7 @@ namespace BeamRebar
         private Button _buildButton;
         private SectionPreview _preview;
         private ElevationPreview _elevation;
+        private BastonPreview _bastonPreview;
 
         private readonly Dictionary<HostAnalysis, (System.Windows.Documents.Run kind, System.Windows.Documents.Run detail)> _itemRuns
             = new Dictionary<HostAnalysis, (System.Windows.Documents.Run, System.Windows.Documents.Run)>();
@@ -520,8 +521,11 @@ namespace BeamRebar
             _bastonGrid = new Grid();
             for (int c = 0; c < 11; c++)
                 _bastonGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            _bastonGrid.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
-            panel.Children.Add(_bastonGrid);
+            panel.Children.Add(new ScrollViewer
+            {
+                Content = _bastonGrid, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+            });
             RebuildBastonTable();
 
             var add = new Button { Content = "Anadir baston", Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(4, 6, 4, 2), HorizontalAlignment = HorizontalAlignment.Left };
@@ -537,6 +541,8 @@ namespace BeamRebar
             panel.Children.Add(add);
             _bastonMessage = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 2, 4, 0), Foreground = RevitTheme.Error };
             panel.Children.Add(_bastonMessage);
+            _bastonPreview = new BastonPreview { Height = 130, Margin = new Thickness(4, 6, 4, 2) };
+            panel.Children.Add(new Border { BorderBrush = RevitTheme.Border, BorderThickness = new Thickness(1), Child = _bastonPreview });
             panel.Children.Add(new TextBlock
             {
                 Text = "Cada baston va en la cara superior o inferior, apilado por dentro de las barras corridas de esa cara (tocandolas, " +
@@ -592,7 +598,7 @@ namespace BeamRebar
                 Put(_bastonGrid, row.Position, r, 1);
 
                 row.Type = TypeCombo(cfg.BarTypeName);
-                row.Type.MinWidth = 120;
+                row.Type.MinWidth = 150;
                 Put(_bastonGrid, row.Type, r, 2);
 
                 row.Count = CountBox(cfg.Count);
@@ -1054,6 +1060,7 @@ namespace BeamRebar
                         string.Join("   ", plan.LayersOf(top).Where(l => l.Main > 0).Select(l => l.Name + ": " + BeamPlan.DescribeLayer(l, false)));
                 if (plan != null) _preview.Show(_selected.Section, plan, hookDeg); else _preview.Clear(text);
                 if (runs != null) _elevation.Show(_selected.Section, plan, runs, bastones, scratch); else _elevation.Clear(text);
+                _bastonPreview.Show(_selected.Section, plan, bastones, scratch);
                 _partitionPreview.Text = "Ejemplo: " + _selected.Partition(scratch, "estribo", "estribo");
                 var bmsgs = new List<string>();
                 if (bastones == null) RebarGenerator.BastonRanges(_selected.Section, scratch, out bmsgs);
@@ -1067,6 +1074,7 @@ namespace BeamRebar
                 _previewCaption.Text = "";
                 _preview.Clear("Sin elemento armable");
                 _elevation.Clear("");
+                _bastonPreview.Clear();
                 _partitionPreview.Text = "";
                 _bastonMessage.Text = "";
             }
