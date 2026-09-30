@@ -12,6 +12,8 @@
     ]
   },
 
+  "sideBars": { "barTypeName": "", "pairs": 0 },
+
   "longitudinal": {
     "startExtensionMm": 0,
     "endExtensionMm": 0,

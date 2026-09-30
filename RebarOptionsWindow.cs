@@ -46,7 +46,8 @@ namespace BeamRebar
         private readonly Dictionary<bool, Grid> _layerGrid = new Dictionary<bool, Grid>();
         private readonly Dictionary<bool, TextBlock> _layerSummary = new Dictionary<bool, TextBlock>();
         private readonly Dictionary<bool, Button> _layerAdd = new Dictionary<bool, Button>();
-        private TextBox _longStart, _longEnd, _endCover, _leg, _layerClear, _minClear;
+        private TextBox _longStart, _longEnd, _endCover, _leg, _layerClear, _minClear, _sidePairs;
+        private ComboBox _sideType;
         private CheckBox _legStart, _legEnd;
 
         // --- barras por capa de la viga seleccionada ---
@@ -284,6 +285,20 @@ namespace BeamRebar
                 RebuildLayerTable(top);
             }
 
+            panel.Children.Add(new TextBlock { Text = "Capa intermedia: barras laterales (pares simetricos, una en cada costado)", FontWeight = FontWeights.SemiBold, Margin = new Thickness(4, 8, 4, 2) });
+            var sideRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4, 0, 4, 0) };
+            sideRow.Children.Add(new TextBlock { Text = "Tipo de barra:", Margin = Pad, VerticalAlignment = VerticalAlignment.Center });
+            _sideType = TypeCombo(_cfg.SideBars.BarTypeName);
+            _sideType.Width = 170;
+            _sideType.ToolTip = "Tipo de barra de las laterales (barras de alma), pegadas a las ramas del estribo.";
+            sideRow.Children.Add(_sideType);
+            sideRow.Children.Add(new TextBlock { Text = "Pares:", Margin = new Thickness(12, 2, 4, 2), VerticalAlignment = VerticalAlignment.Center });
+            _sidePairs = CountBox(_cfg.SideBars.Pairs);
+            _sidePairs.ToolTip = "Numero de pares: cada par es una barra a cada costado, a la misma altura. Se reparten por igual en el canto libre entre las capas superiores e inferiores. 0 = sin laterales. En el centro de la seccion no va nada.";
+            sideRow.Children.Add(_sidePairs);
+            Hook(_sideType); Hook(_sidePairs);
+            panel.Children.Add(sideRow);
+
             var form = FormGrid();
             int r = 0;
             _longStart = NumBox(_cfg.Longitudinal.StartExtensionMm);
@@ -427,13 +442,34 @@ namespace BeamRebar
                     if (item == null) return;
                     foreach (double w in new[] { 150, 50, 70, 150, 50, 70 })
                         _ownGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(w) });
-                    int rows = Math.Max(nt, nb);
+                    int rows = Math.Max(nt, nb) + 1;
                     for (int i = 0; i < rows; i++)
                     {
                         _ownGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                         foreach (bool top in new[] { true, false })
                         {
                             int count = top ? nt : nb;
+                            if (i == rows - 1)
+                            {
+                                if (!top) continue;
+                                var lbs = new TextBlock { Text = "Laterales (pares)", Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
+                                Put(_ownGrid, lbs, i, 0);
+                                var boxS = new TextBox { Width = 44, Margin = Pad, ToolTip = "Pares de barras laterales solo en esta viga; vacio = el general" };
+                                Put(_ownGrid, boxS, i, 1);
+                                boxS.TextChanged += (s, e) =>
+                                {
+                                    if (_refreshingOwn) return;
+                                    string txt = boxS.Text.Trim();
+                                    if (txt.Length == 0) item.SetOwnSide(-1);
+                                    else if (int.TryParse(txt, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 0) item.SetOwnSide(n);
+                                    Refresh();
+                                };
+                                var resetS = new Button { Content = "general", Padding = new Thickness(6, 1, 6, 1), Margin = Pad };
+                                resetS.Click += (s, e) => { item.SetOwnSide(-1); Refresh(); };
+                                Put(_ownGrid, resetS, i, 2);
+                                _ownRows.Add((true, 0, boxS));
+                                continue;
+                            }
                             if (i >= count) continue;
                             int col = top ? 0 : 3;
                             int idx = i + 1;
@@ -460,6 +496,13 @@ namespace BeamRebar
                 if (item == null) return;
                 foreach ((bool top, int index, TextBox box) in _ownRows)
                 {
+                    if (index == 0)
+                    {
+                        int ownS = item.OwnSide();
+                        if (!box.IsFocused) box.Text = ownS < 0 ? "" : ownS.ToString(CultureInfo.InvariantCulture);
+                        box.Background = ownS >= 0 ? RevitTheme.OwnValue : RevitTheme.Input;
+                        continue;
+                    }
                     int own = item.Own(top, index);
                     if (!box.IsFocused) box.Text = own < 0 ? "" : own.ToString(CultureInfo.InvariantCulture);
                     box.Background = own >= 0 ? RevitTheme.OwnValue : RevitTheme.Input;
@@ -719,6 +762,7 @@ namespace BeamRebar
             var legend = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
             LegendItem(legend, SectionPreview.CornerBrush, "barra extrema de capa");
             LegendItem(legend, SectionPreview.IntermediateBrush, "barra intermedia");
+            LegendItem(legend, SectionPreview.SideBrush, "barra lateral");
             LegendItem(legend, SectionPreview.BastonBrush, "baston");
             LegendItem(legend, SectionPreview.StirrupBrush, "estribo (con sus ganchos)");
             DockPanel.SetDock(legend, Dock.Bottom);
@@ -888,6 +932,10 @@ namespace BeamRebar
             c.Longitudinal.LegAtEnd = _legEnd.IsChecked == true;
             c.Longitudinal.LayerClearMm = ReadNum(_layerClear, "separacion entre capas", 0, errors);
             c.Longitudinal.MinClearMm = ReadNum(_minClear, "separacion libre minima", 0, errors);
+            c.SideBars.BarTypeName = TypeOf(_sideType);
+            if (int.TryParse(_sidePairs.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int sp) && sp >= 0)
+            { c.SideBars.Pairs = sp; _sidePairs.ClearValue(Control.BorderBrushProperty); }
+            else { errors.Add("laterales: numero de pares no valido"); _sidePairs.BorderBrush = RevitTheme.Error; }
 
             ReadBastonRows(errors);
             c.Bastones = _bastonStore.Select(b => b.Clone()).ToList();
@@ -934,6 +982,7 @@ namespace BeamRebar
                     if (used && string.IsNullOrEmpty(l.BarTypeName)) missing.Add("capa " + (top ? "S" : "I") + (i + 1));
                 }
             if (string.IsNullOrEmpty(c.Stirrups.BarTypeName)) missing.Add("estribos");
+            if ((c.SideBars.Pairs > 0 || _items.Any(it => it.OwnSide() > 0)) && string.IsNullOrEmpty(c.SideBars.BarTypeName)) missing.Add("barras laterales");
             for (int i = 0; i < c.Bastones.Count; i++)
                 if (string.IsNullOrEmpty(c.Bastones[i].BarTypeName)) missing.Add("baston " + (i + 1));
             return missing;
@@ -950,6 +999,7 @@ namespace BeamRebar
                     combos.Add((_layerRows[top][i].Corner, used));
                 }
             foreach (BastonRow row in _bastonRows) combos.Add((row.Type, true));
+            combos.Add((_sideType, c.SideBars.Pairs > 0 || _items.Any(it => it.OwnSide() > 0)));
             foreach ((ComboBox cb, bool required) in combos)
             {
                 if (_strictTypes && required && cb.SelectedIndex < 0) { cb.BorderBrush = RevitTheme.Error; cb.BorderThickness = new Thickness(2); }

@@ -98,6 +98,8 @@ namespace BeamRebar
                     }
                 }
             for (int i = 0; i < cfg.Bastones.Count; i++) Type(cfg.Bastones[i].BarTypeName, "baston " + (i + 1));
+            int sidePairs = item.OwnSide() >= 0 ? item.OwnSide() : cfg.SideBars.Pairs;
+            if (sidePairs > 0) Type(cfg.SideBars.BarTypeName, "barras laterales");
             RebarBarType btStirrup = FindBarType(doc, cfg.Stirrups.BarTypeName, "estribos");
             c.Hook = FindHookType(doc, cfg.Stirrups.HookTypeName);
 
@@ -129,6 +131,7 @@ namespace BeamRebar
                 LayerClear = Mm(cfg.Longitudinal.LayerClearMm), MinClear = Mm(cfg.Longitudinal.MinClearMm),
                 Top = cfg.TopBars, Bottom = cfg.BottomBars, Bastones = cfg.Bastones,
                 Diameter = diameter, CountOverride = (top, layer) => item.Own(top, layer),
+                Sides = cfg.SideBars, SideOverride = item.OwnSide(),
                 FallbackDb = fallbackDb, Tol = Mm(cfg.PrismCheckToleranceMm)
             };
             return BeamPlan.Build(o);
@@ -214,7 +217,7 @@ namespace BeamRebar
                 else
                 {
                     ranges.Add((ext0 > 0 ? -ext0 : endCover, ext1 > 0 ? s.Length + ext1 : s.Length - endCover, "",
-                                leg > 0 && L.LegAtStart, leg > 0 && L.LegAtEnd, first.Top ? "superior" : "inferior"));
+                                leg > 0 && L.LegAtStart && !first.IsSide, leg > 0 && L.LegAtEnd && !first.IsSide, first.IsSide ? "lateral" : first.Top ? "superior" : "inferior"));
                 }
 
                 foreach ((double w0, double w1, string label, bool legStart, bool legEnd, string face) in ranges)

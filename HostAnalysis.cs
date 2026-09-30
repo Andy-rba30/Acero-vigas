@@ -35,6 +35,10 @@ namespace BeamRebar
             else LayerOverrides[Key(top, layer)] = count;
         }
 
+        /// <summary>Pares de barras laterales propios de esta viga, o -1 si usa el general.</summary>
+        public int OwnSide() => LayerOverrides.TryGetValue("L", out int n) ? n : -1;
+        public void SetOwnSide(int pairs) { if (pairs < 0) LayerOverrides.Remove("L"); else LayerOverrides["L"] = pairs; }
+
         public bool CanBuild => Error == null && Section != null;
 
         public string Kind => Error != null ? "SIN ARMAR" : "Viga " + Section.KindName;

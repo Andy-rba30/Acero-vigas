@@ -70,13 +70,18 @@ ninguna barra. Un cambio de sección en un tramo más corto que dos estaciones p
   entre las extremas: así una capa puede ser "2 Ø3/4" + 1 Ø5/8"" y la segunda "2 Ø3/4"".
   Hasta 3 capas por cara. En la ventana, cada viga puede cambiar el **número de barras
   de cada capa** (0 en una capa 2 o 3 = sin esa capa en esa viga).
+- **Capa intermedia (barras laterales)**: pares simétricos de barras de alma, una en cada
+  rama del estribo a la misma altura, repartidos por igual en el canto libre entre el
+  paquete superior y el inferior (en el centro de la sección no va nada). Tipo de barra
+  y número de pares general, y número de pares propio de cada viga.
 - **Bastones**: barras cortas de refuerzo en la cara superior o inferior, con su tipo,
   su número de barras y su tramo: **inicio**, **fin** o **ambos extremos** (longitud desde
   la cara del apoyo hacia el vano, más un **anclaje** dentro del apoyo más allá de la
   cara), **centro del vano** (longitud total centrada) o **tramo** (desde / hasta desde la
   cara de inicio). La longitud se escribe en mm (`1500`; en metros si es menor de 5).
-  Como en el add-in de muros, cada bastón va **apilado por dentro** de las barras
-  corridas de su cara (tocando la capa más interior, o con el **hueco** que se indique)
+  Como en el add-in de muros, cada bastón va **apilado por dentro** de la capa 1 de su
+  cara (tocándola, o con el **hueco** que se indique), en el hueco central que dejan las
+  capas 2 y 3 a esa altura
   o **en la misma capa** que ellas, intercalado en los huecos entre las corridas de forma
   simétrica desde el centro con la separación libre mínima.
 - Comprobaciones: las capas superiores e inferiores no pueden solaparse en el canto
@@ -172,6 +177,7 @@ Armar avisa de qué falta.
   "coverMm": 40,
   "topBars":    { "layers": [ { "barTypeName": "", "intermediateBarTypeName": "", "count": 2 } ] },
   "bottomBars": { "layers": [ { "barTypeName": "", "intermediateBarTypeName": "", "count": 2 } ] },
+  "sideBars": { "barTypeName": "", "pairs": 0 },
   "longitudinal": { "startExtensionMm": 0, "endExtensionMm": 0, "endCoverMm": 40,
                     "legMm": 0, "legAtStart": true, "legAtEnd": true,
                     "layerClearMm": 25, "minClearMm": 25 },

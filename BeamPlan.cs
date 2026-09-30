@@ -5,7 +5,7 @@ using System.Linq;
 
 namespace BeamRebar
 {
-    public enum BarKind { Corner, Intermediate, Baston }
+    public enum BarKind { Corner, Intermediate, Baston, Side }
 
     /// <summary>
     /// Una barra longitudinal en la seccion: posicion u (eje) y distancia del eje a la cara
@@ -29,8 +29,10 @@ namespace BeamRebar
         public Pt P(Rect web) => new Pt(U, V(web));
         public bool IsBaston => Kind == BarKind.Baston;
 
-        public string Label => (IsBaston ? "baston " + (Baston + 1) : Kind == BarKind.Corner ? "barra extrema" : "barra intermedia") +
-                               " " + (Top ? "superior" : "inferior") + " capa " + Layer;
+        public bool IsSide => Kind == BarKind.Side;
+        public string Label => IsSide ? "barra lateral par " + Layer
+            : (IsBaston ? "baston " + (Baston + 1) : Kind == BarKind.Corner ? "barra extrema" : "barra intermedia") +
+              " " + (Top ? "superior" : "inferior") + " capa " + Layer;
     }
 
     /// <summary>Una capa de barras de una cara, ya apilada.</summary>
@@ -59,6 +61,9 @@ namespace BeamRebar
         /// <summary>Separacion libre entre capas y minima entre barras de una capa (ademas nunca menor que un diametro).</summary>
         public double LayerClear, MinClear;
         public FaceCfg Top, Bottom;
+        public SideBarsCfg Sides;
+        /// <summary>Pares de laterales propios de esta viga; -1 = el general.</summary>
+        public int SideOverride = -1;
         public IList<BastonCfg> Bastones;
         /// <summary>Diametro (pies) de un tipo de barra por su nombre; 0 si no existe o esta vacio.</summary>
         public Func<string, double> Diameter;
@@ -110,7 +115,8 @@ namespace BeamRebar
         public double Cover => Opt.Cover;
         public double Ds => Opt.Ds;
         public IEnumerable<PlanLayer> LayersOf(bool top) => Layers.Where(l => l.Top == top);
-        public int MainCount => Bars.Count(b => !b.IsBaston);
+        public int MainCount => Bars.Count(b => !b.IsBaston && !b.IsSide);
+        public int SideCount => Bars.Count(b => b.IsSide);
         public int BastonCount => Bars.Count(b => b.IsBaston);
         /// <summary>Distancia de la cara superior / inferior a lo mas interior de su paquete de capas.</summary>
         public double TopInner => LayersOf(true).Select(l => l.Inner).DefaultIfEmpty(Cover + Ds).Max();
@@ -122,7 +128,7 @@ namespace BeamRebar
         public string Describe() =>
             Error != null ? Error
             : MainCount + " barras corridas (" + LayersOf(true).Sum(l => l.Main) + " arriba, " + LayersOf(false).Sum(l => l.Main) + " abajo)" +
-              (BastonCount > 0 ? ", " + BastonCount + " de bastones" : "") + ", estribo " + Mm(Line.W + Ds) + " x " + Mm(Line.H + Ds);
+              (SideCount > 0 ? ", " + SideCount + " laterales" : "") + (BastonCount > 0 ? ", " + BastonCount + " de bastones" : "") + ", estribo " + Mm(Line.W + Ds) + " x " + Mm(Line.H + Ds);
 
         /// <summary>Resumen por capa: "S1 3, S2 2 | I1 4".</summary>
         public string DescribeLayers() =>
@@ -180,14 +186,51 @@ namespace BeamRebar
                     outer = layer.Inner + o.LayerClear;
                 }
 
-                // bastones apilados por dentro de las corridas: una capa nueva tangente a la mas interior (con su hueco)
-                if (pending.Count > 0)
+                // bastones apilados: pegados por dentro de la capa 1 (con su hueco), en el hueco que dejan
+                // las barras de las demas capas a esa altura (las capas 2 y 3 suelen ir solo a los costados)
+                PlanLayer first = plan.LayersOf(top).FirstOrDefault(l => l.Index == 1);
+                double base0 = first?.Inner ?? (o.Cover + o.Ds);
+                for (int k = 0; k < pending.Count;)
                 {
-                    PlanLayer inner = plan.LayersOf(top).LastOrDefault();
-                    double gap = pending.Max(p => Math.Max(0, p.cfg.GapMm)) / 304.8;
-                    var layer = new PlanLayer { Top = top, Index = (inner?.Index ?? 0) + 1, Outer = (inner?.Inner ?? (o.Cover + o.Ds)) + gap };
-                    plan.PlaceBastones(layer, pending, stacked: true, inU1, inU2);
+                    (int index, BastonCfg cfg) = pending[k];
+                    if (!cfg.Stacked) { k++; continue; }
+                    double db = Opt_Dia(o, cfg.BarTypeName);
+                    if (db <= 0) { pending.RemoveAt(k); continue; }
+                    double outerB = base0 + Math.Max(0, cfg.GapMm) / 304.8;
+                    // barras de la cara que ocupan esa franja de altura: no se puede poner el baston encima
+                    var blockers = new PlanLayer { Top = top, Index = 0, Outer = outerB };
+                    foreach (PlanBar b in plan.Bars.Where(b => b.Top == top && !b.IsSide))
+                        if (b.FaceOffset + 0.5 * b.Db > outerB - tol && b.FaceOffset - 0.5 * b.Db < outerB + db + tol) blockers.Bars.Add(b);
+                    List<double> us = plan.Fit(blockers, cfg.Count, db, inU1, inU2, true, out int missing);
+                    int idx = plan.LayersOf(top).Select(l => l.Index).DefaultIfEmpty(0).Max() + 1;
+                    var layer = new PlanLayer { Top = top, Index = idx, Outer = outerB };
+                    if (us != null) foreach (double u in us) plan.Add(layer, u, db, cfg.BarTypeName, BarKind.Baston, index);
+                    if (us == null || missing > 0)
+                        plan.Warnings.Add("baston " + (index + 1) + " (" + cfg.Describe + "): no caben " + (us == null ? cfg.Count : missing) +
+                                          " barra(s) apiladas bajo la capa 1 con la separacion libre minima");
+                    layer.Missing = us == null ? cfg.Count : missing;
                     if (layer.Bars.Count > 0) plan.Close(layer);
+                    pending.RemoveAt(k);
+                }
+            }
+
+            // --- barras laterales: pares simetricos pegados a las ramas del estribo, repartidos en el canto libre ---
+            {
+                int pairs = o.SideOverride >= 0 ? o.SideOverride : (o.Sides?.Pairs ?? 0);
+                double dbS = pairs > 0 && o.Sides != null ? o.Dia(o.Sides.BarTypeName) : 0;
+                if (pairs > 0 && dbS > 0)
+                {
+                    double vTop = plan.Web.V2 - plan.TopInner, vBot = plan.Web.V1 + plan.BottomInner;
+                    double freeH = vTop - vBot;
+                    double need = pairs * dbS + (pairs + 1) * Math.Max(o.MinClear, dbS);
+                    if (freeH < need - tol)
+                        plan.Warnings.Add("laterales: " + pairs + " par(es) no caben en el canto libre de " + Mm(freeH) + " mm con la separacion libre minima");
+                    for (int k = 1; k <= pairs; k++)
+                    {
+                        double v = vBot + freeH * k / (pairs + 1);
+                        foreach (double u in new[] { inU1 + 0.5 * dbS, inU2 - 0.5 * dbS })
+                            plan.Bars.Add(new PlanBar { U = u, FaceOffset = v - plan.Web.V1, Db = dbS, TypeName = o.Sides.BarTypeName, Top = false, Layer = k, Kind = BarKind.Side });
+                    }
                 }
             }
 
@@ -289,6 +332,8 @@ namespace BeamRebar
         /// caben con la separacion libre minima (salvo "force", que coloca las que quepan y
         /// cuenta las que faltan en "missing").
         /// </summary>
+        private static double Opt_Dia(PlanOptions o, string name) => o.Dia(name);
+
         private List<double> Fit(PlanLayer layer, int count, double db, double inU1, double inU2, bool force, out int missing)
         {
             missing = 0;

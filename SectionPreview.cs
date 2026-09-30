@@ -41,7 +41,8 @@ namespace BeamRebar
         public static readonly Brush BastonBrush = new SolidColorBrush(Color.FromRgb(0x7A, 0x3E, 0x9D));
         public static readonly Brush ConcreteBrush = new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE6));
 
-        public static Brush BrushOf(PlanBar b) => b.IsBaston ? BastonBrush : b.Kind == BarKind.Corner ? CornerBrush : IntermediateBrush;
+        public static readonly Brush SideBrush = new SolidColorBrush(Color.FromRgb(0x3B, 0x6F, 0xB6));
+        public static Brush BrushOf(PlanBar b) => b.IsSide ? SideBrush : b.IsBaston ? BastonBrush : b.Kind == BarKind.Corner ? CornerBrush : IntermediateBrush;
 
         public SectionPreview()
         {
@@ -202,6 +203,8 @@ namespace BeamRebar
                 double v = l.Bars.Average(b => b.V(web));
                 Text(l.Name, X(uMin) - 24, Y(v) - 8, l.Top ? CornerBrush : IntermediateBrush, 10, true);
             }
+            foreach (var g in _plan.Bars.Where(b => b.IsSide).GroupBy(b => b.Layer))
+                Text("L" + g.Key, X(uMin) - 24, Y(g.First().V(web)) - 8, SideBrush, 10, true);
 
             // resumen
             Text(_plan.Describe() + " | " + _plan.DescribeLayers(), 8, H - 20, Brushes.DimGray, 11);

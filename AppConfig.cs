@@ -43,6 +43,14 @@ namespace BeamRebar
         }
     }
 
+    /// <summary>Barras laterales (capa intermedia): pares simetricos pegados a las ramas del estribo, a alturas iguales entre las capas superiores e inferiores.</summary>
+    public class SideBarsCfg
+    {
+        public string BarTypeName { get; set; } = "";
+        /// <summary>Numero de pares (cada par = una barra en cada costado, a la misma altura). 0 = sin laterales.</summary>
+        public int Pairs { get; set; } = 0;
+    }
+
     /// <summary>Reglas comunes de las barras longitudinales corridas.</summary>
     public class LongitudinalCfg
     {
@@ -148,6 +156,8 @@ namespace BeamRebar
         public FaceCfg TopBars { get; set; } = new FaceCfg();
         public FaceCfg BottomBars { get; set; } = new FaceCfg();
         public LongitudinalCfg Longitudinal { get; set; } = new LongitudinalCfg();
+        /// <summary>Capa intermedia: barras laterales por pares simetricos (una en cada rama del estribo), repartidas en el canto libre entre las capas superiores e inferiores.</summary>
+        public SideBarsCfg SideBars { get; set; } = new SideBarsCfg();
         public List<BastonCfg> Bastones { get; set; } = new List<BastonCfg>();
         public StirrupCfg Stirrups { get; set; } = new StirrupCfg();
 
@@ -206,6 +216,9 @@ namespace BeamRebar
             if (TopBars == null) TopBars = new FaceCfg();
             if (BottomBars == null) BottomBars = new FaceCfg();
             if (Longitudinal == null) Longitudinal = new LongitudinalCfg();
+            if (SideBars == null) SideBars = new SideBarsCfg();
+            if (SideBars.BarTypeName == null) SideBars.BarTypeName = "";
+            if (SideBars.Pairs < 0) SideBars.Pairs = 0;
             if (Bastones == null) Bastones = new List<BastonCfg>();
             if (Stirrups == null) Stirrups = new StirrupCfg();
             foreach (FaceCfg f in new[] { TopBars, BottomBars })
