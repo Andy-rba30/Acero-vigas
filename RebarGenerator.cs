@@ -136,6 +136,8 @@ namespace BeamRebar
                 TypeOverride = key => item.BarTypeOverrides.TryGetValue(key, out string t) ? t : null,
                 FallbackDb = fallbackDb, Tol = Mm(cfg.PrismCheckToleranceMm)
             };
+            List<BastonRange> ranges = BastonRanges(s, cfg, out _);
+            o.BastonsOverlap = (i, j) => ranges.Any(a => a.Index == i && ranges.Any(b => b.Index == j && a.W0 < b.W1 - 1e-9 && b.W0 < a.W1 - 1e-9));
             return BeamPlan.Build(o);
         }
 

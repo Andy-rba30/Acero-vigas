@@ -313,7 +313,7 @@ namespace BeamRebar
             _legStart = new CheckBox { Content = "en el inicio", IsChecked = _cfg.Longitudinal.LegAtStart, Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
             _legEnd = new CheckBox { Content = "en el fin", IsChecked = _cfg.Longitudinal.LegAtEnd, Margin = Pad, VerticalAlignment = VerticalAlignment.Center };
             legRow.Children.Add(_leg); legRow.Children.Add(_legStart); legRow.Children.Add(_legEnd);
-            Hook(_legStart); Hook(_legEnd);
+            Hook(_leg); Hook(_legStart); Hook(_legEnd);
             AddRow(form, r++, "Patilla a 90 grados (mm):", legRow,
                    "Patilla en los extremos prolongados: las barras superiores doblan hacia abajo y las inferiores hacia arriba (gancho estandar " +
                    "dentro del apoyo). Necesita prolongacion mayor que 0 en ese extremo. 0 = sin patilla.");

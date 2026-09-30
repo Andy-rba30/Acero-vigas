@@ -75,6 +75,10 @@ namespace BeamRebar
         public Func<bool, int, int> CountOverride;
         /// <summary>Tipo de barra asignado a mano a una barra concreta de esta viga (por su Key); null = el general.</summary>
         public Func<string, string> TypeOverride;
+        /// <summary>True si los bastones i y j coinciden en algun tramo de la viga (solo entonces se estorban en la seccion); null = todos coinciden.</summary>
+        public Func<int, int, bool> BastonsOverlap;
+
+        public bool Overlap(int i, int j) => i == j || BastonsOverlap == null || BastonsOverlap(i, j);
         /// <summary>Diametro orientativo para dibujar las barras sin tipo elegido (0 = no se colocan).</summary>
         public double FallbackDb;
         public double Tol;
@@ -205,7 +209,7 @@ namespace BeamRebar
                     double outerB = base0 + Math.Max(0, cfg.GapMm) / 304.8;
                     // barras de la cara que ocupan esa franja de altura: no se puede poner el baston encima
                     var blockers = new PlanLayer { Top = top, Index = 0, Outer = outerB };
-                    foreach (PlanBar b in plan.Bars.Where(b => b.Top == top && !b.IsSide))
+                    foreach (PlanBar b in plan.Bars.Where(b => b.Top == top && !b.IsSide && (!b.IsBaston || o.Overlap(index, b.Baston))))
                         if (b.FaceOffset + 0.5 * b.Db > outerB + tol && b.FaceOffset - 0.5 * b.Db < outerB + db - tol) blockers.Bars.Add(b);
                     List<double> us = plan.Fit(blockers, cfg.Count, db, inU1, inU2, true, out int missing);
                     int idx = plan.LayersOf(top).Select(l => l.Index).DefaultIfEmpty(0).Max() + 1;
@@ -326,7 +330,10 @@ namespace BeamRebar
                 if (cfg.Stacked != stacked) { k++; continue; }
                 double db = Opt.Dia(cfg.BarTypeName);
                 if (db <= 0) { pending.RemoveAt(k); continue; }   // sin tipo de barra: no se dibuja (la ventana lo marca)
-                List<double> us = Fit(layer, cfg.Count, db, inU1, inU2, true, out int missing);
+                // los bastones que no coinciden en longitud con este no le estorban: ocupan el mismo sitio en la seccion
+                var visible = new PlanLayer { Top = layer.Top, Index = layer.Index, Outer = layer.Outer };
+                visible.Bars.AddRange(layer.Bars.Where(b => !b.IsBaston || Opt.Overlap(index, b.Baston)));
+                List<double> us = Fit(visible, cfg.Count, db, inU1, inU2, true, out int missing);
                 if (us != null) foreach (double u in us) Add(layer, u, db, cfg.BarTypeName, BarKind.Baston, index);
                 if (missing > 0 || us == null)
                     Warnings.Add("baston " + (index + 1) + " (" + cfg.Describe + "): no caben " + (us == null ? cfg.Count : missing) +
