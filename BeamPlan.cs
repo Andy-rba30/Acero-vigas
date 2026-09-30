@@ -93,9 +93,9 @@ namespace BeamRebar
     ///    las ramas del estribo (esquinas) y las intermedias repartidas por igual entre
     ///    ellas, cada grupo con su diametro; las capas siguientes se apilan hacia dentro con
     ///    la separacion libre entre capas, repartidas en el mismo ancho;
-    ///  - cada baston va a la capa que se le indique o, en automatico, a la primera en la que
-    ///    quepa: en los huecos entre las barras corridas de esa capa (de forma simetrica) con
-    ///    la separacion libre minima, o en una capa nueva por dentro si no cabe en ninguna.
+    ///  - cada baston va apilado por dentro de las barras corridas de su cara (una capa nueva,
+    ///    tangente a la mas interior o con el hueco que se pida) o intercalado en la capa 1,
+    ///    en los huecos entre las corridas (de forma simetrica, con la separacion libre minima).
     /// </summary>
     public sealed class BeamPlan
     {
@@ -129,14 +129,15 @@ namespace BeamRebar
             string.Join(", ", LayersOf(true).Select(l => l.Name + " " + l.Bars.Count)) + " | " +
             string.Join(", ", LayersOf(false).Select(l => l.Name + " " + l.Bars.Count));
 
-        /// <summary>Descripcion de una capa como en los planos: "2 de 3/4 + 1 de 5/8 (+ baston 1)".</summary>
-        public static string DescribeLayer(PlanLayer l)
+        /// <summary>Descripcion de una capa como en los planos: "2 de 3/4 + 1 de 5/8" (con o sin sus bastones).</summary>
+        public static string DescribeLayer(PlanLayer l, bool withBastones = true)
         {
             var parts = new List<string>();
             foreach (var g in l.Bars.Where(b => !b.IsBaston).GroupBy(b => b.TypeName).OrderByDescending(g => g.First().Db))
                 parts.Add(g.Count() + " " + g.Key);
-            foreach (var g in l.Bars.Where(b => b.IsBaston).GroupBy(b => b.Baston))
-                parts.Add("baston " + (g.Key + 1) + ": " + g.Count() + " " + g.First().TypeName);
+            if (withBastones)
+                foreach (var g in l.Bars.Where(b => b.IsBaston).GroupBy(b => b.Baston))
+                    parts.Add("baston " + (g.Key + 1) + ": " + g.Count() + " " + g.First().TypeName);
             return string.Join(" + ", parts);
         }
 
@@ -173,25 +174,21 @@ namespace BeamRebar
                     if (li == 0) cnt = Math.Max(2, cnt);
                     var layer = new PlanLayer { Top = top, Index = li + 1, Outer = outer };
                     plan.PlaceMain(layer, lc, cnt, inU1, inU2);
-                    plan.PlaceBastones(layer, pending, configured, inU1, inU2);
+                    if (li == 0) plan.PlaceBastones(layer, pending, stacked: false, inU1, inU2);
                     if (layer.Bars.Count == 0) continue;
                     plan.Close(layer);
                     outer = layer.Inner + o.LayerClear;
                 }
 
-                // capas nuevas para los bastones que no cupieron o piden una capa que no existe
-                int next = plan.LayersOf(top).Select(l => l.Index).DefaultIfEmpty(0).Max() + 1;
-                while (pending.Count > 0 && next <= 4)
+                // bastones apilados por dentro de las corridas: una capa nueva tangente a la mas interior (con su hueco)
+                if (pending.Count > 0)
                 {
-                    var layer = new PlanLayer { Top = top, Index = next, Outer = outer };
-                    plan.PlaceBastones(layer, pending, configured, inU1, inU2, last: next == 4);
-                    if (layer.Bars.Count == 0) break;
-                    plan.Close(layer);
-                    outer = layer.Inner + o.LayerClear;
-                    next++;
+                    PlanLayer inner = plan.LayersOf(top).LastOrDefault();
+                    double gap = pending.Max(p => Math.Max(0, p.cfg.GapMm)) / 304.8;
+                    var layer = new PlanLayer { Top = top, Index = (inner?.Index ?? 0) + 1, Outer = (inner?.Inner ?? (o.Cover + o.Ds)) + gap };
+                    plan.PlaceBastones(layer, pending, stacked: true, inU1, inU2);
+                    if (layer.Bars.Count > 0) plan.Close(layer);
                 }
-                foreach ((int index, BastonCfg cfg) in pending)
-                    plan.Warnings.Add("baston " + (index + 1) + " (" + cfg.Describe + "): no cabe en ninguna capa");
             }
 
             // --- comprobaciones ---
@@ -264,30 +261,23 @@ namespace BeamRebar
         }
 
         /// <summary>
-        /// Coloca en la capa los bastones pendientes que le corresponden: los que piden esta
-        /// capa (o una que no existe, si la capa es nueva) y los automaticos que quepan.
-        /// Con "last" se fuerzan los que queden aunque no quepan (se avisa).
+        /// Coloca en la capa los bastones pendientes de ese tipo (apilados o intercalados). Si
+        /// no caben con la separacion libre minima se colocan los que quepan y se avisa.
         /// </summary>
-        private void PlaceBastones(PlanLayer layer, List<(int index, BastonCfg cfg)> pending, int configured, double inU1, double inU2, bool last = false)
+        private void PlaceBastones(PlanLayer layer, List<(int index, BastonCfg cfg)> pending, bool stacked, double inU1, double inU2)
         {
             for (int k = 0; k < pending.Count;)
             {
                 (int index, BastonCfg cfg) = pending[k];
-                int wanted = cfg.LayerIndex;
-                bool eligible = wanted == 0 || wanted == layer.Index || (wanted > configured && layer.Index > configured);
-                if (!eligible) { k++; continue; }
+                if (cfg.Stacked != stacked) { k++; continue; }
                 double db = Opt.Dia(cfg.BarTypeName);
                 if (db <= 0) { pending.RemoveAt(k); continue; }   // sin tipo de barra: no se dibuja (la ventana lo marca)
-                List<double> us = Fit(layer, cfg.Count, db, inU1, inU2, last || (wanted == layer.Index), out int missing);
-                if (us == null)
-                {
-                    if (wanted == layer.Index)
-                        Warnings.Add("baston " + (index + 1) + " (" + cfg.Describe + "): no cabe en la capa " + layer.Name + ", se pasa a la siguiente");
-                    k++;
-                    continue;
-                }
-                foreach (double u in us) Add(layer, u, db, cfg.BarTypeName, BarKind.Baston, index);
-                layer.Missing += missing;
+                List<double> us = Fit(layer, cfg.Count, db, inU1, inU2, true, out int missing);
+                if (us != null) foreach (double u in us) Add(layer, u, db, cfg.BarTypeName, BarKind.Baston, index);
+                if (missing > 0 || us == null)
+                    Warnings.Add("baston " + (index + 1) + " (" + cfg.Describe + "): no caben " + (us == null ? cfg.Count : missing) +
+                                 " barra(s) " + (stacked ? "apiladas" : "intercaladas en la capa 1") + " con la separacion libre minima");
+                layer.Missing += us == null ? cfg.Count : missing;
                 pending.RemoveAt(k);
             }
         }

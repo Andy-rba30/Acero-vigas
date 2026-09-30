@@ -74,13 +74,11 @@ ninguna barra. Un cambio de sección en un tramo más corto que dos estaciones p
   su número de barras y su tramo: **inicio**, **fin** o **ambos extremos** (longitud desde
   la cara del apoyo hacia el vano, más un **anclaje** dentro del apoyo más allá de la
   cara), **centro del vano** (longitud total centrada) o **tramo** (desde / hasta desde la
-  cara de inicio). La longitud se escribe en mm (`1500`), en metros si es menor de 5
-  (`1.5`) o como **fracción de la longitud de la viga** (`L/4`, `0.3L`), que se resuelve
-  viga a viga. Cada bastón va en la **capa** que se le indique o, en **automática**, en la
-  primera en la que quepa: en los huecos entre las barras corridas de esa capa (de forma
-  simétrica desde el centro, con la separación libre mínima) o, si no cabe en ninguna,
-  en una capa nueva por dentro. El bastón vale como barra de apoyo de la capa
-  siguiente, igual que las corridas.
+  cara de inicio). La longitud se escribe en mm (`1500`; en metros si es menor de 5).
+  Como en el add-in de muros, cada bastón va **apilado por dentro** de las barras
+  corridas de su cara (tocando la capa más interior, o con el **hueco** que se indique)
+  o **en la misma capa** que ellas, intercalado en los huecos entre las corridas de forma
+  simétrica desde el centro con la separación libre mínima.
 - Comprobaciones: las capas superiores e inferiores no pueden solaparse en el canto
   **mínimo** de la viga (error); barras a menos de `minClearMm` (25) o de un diámetro
   libres, o bastones que no caben, se avisan (la fila de la viga y el esquema lo dicen).
@@ -96,9 +94,9 @@ capa, sus intermedias, las de un bastón) se crean como un solo conjunto de Revi
   `endCoverMm` de la cara. Las prolongaciones y los anclajes de los bastones son las
   únicas partes de barra que pueden estar fuera del hormigón de la viga: el resto se
   comprueba.
-- Con **patilla** llevan una pata a 90° en los extremos prolongados: las superiores
-  doblan hacia abajo y las inferiores hacia arriba (gancho estándar dentro del apoyo).
-  Necesita prolongación mayor que 0 en ese extremo.
+- Con **patilla** llevan una pata a 90° en los extremos elegidos: las superiores
+  doblan hacia abajo y las inferiores hacia arriba (gancho estándar). Con prolongación
+  queda dentro del apoyo; sin prolongación, dentro de la viga a `endCoverMm` de la cara.
 - Cada barra se define por su distancia a la cara del alma de su lado, así en los tramos
   de **canto variable** sigue la cara inclinada (quiebro en cada cambio de tramo) y en un
   **escalón** salva el salto con una **bayoneta a 45°** dentro del lado de más canto,
@@ -178,8 +176,8 @@ Armar avisa de qué falta.
                     "legMm": 0, "legAtStart": true, "legAtEnd": true,
                     "layerClearMm": 25, "minClearMm": 25 },
   "bastones": [
-    { "face": "top", "position": "both", "barTypeName": "", "count": 1, "layer": "auto",
-      "length": "L/4", "anchorMm": 0, "fromMm": 0, "toMm": 0 }
+    { "face": "top", "position": "both", "barTypeName": "", "count": 1, "stacked": true, "gapMm": 0,
+      "length": "1500", "anchorMm": 0, "fromMm": 0, "toMm": 0 }
   ],
   "stirrups":   { "barTypeName": "", "hookTypeName": "135", "hookOrientation": "left",
                   "distribution": "1@50, 8@100, R@200", "symmetric": true,
@@ -191,7 +189,7 @@ Armar avisa de qué falta.
 ```
 
 `face`: `top` / `bottom`. `position`: `start`, `end`, `both`, `center` o `custom`.
-`layer`: `auto`, `1`, `2` o `3`. Los nombres de tipo de barra y de gancho pueden ser
+`stacked`: `true` (apilado por dentro, con `gapMm` de hueco) o `false` (en la misma capa). Los nombres de tipo de barra y de gancho pueden ser
 exactos o un fragmento (`"135"`, `"3/8"`); sin coincidencia no se arma, nunca se
 sustituye por otro tipo.
 

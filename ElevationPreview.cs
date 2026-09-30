@@ -144,19 +144,17 @@ namespace BeamRebar
                         var path = BarPaths.Path(prof, first.Top, first.FaceOffset, w0, w1, inset, tol, null, first.Label);
                         DrawPath(path, X, Y, brush, thick, L, first.Label + ": " + count + " x " + first.TypeName);
                         double dir = first.Top ? -1 : 1;
-                        if (leg > 0 && _cfg.Longitudinal.LegAtStart && ext0 > 0)
-                            Children.Add(new Line { X1 = X(path[0].w), Y1 = Y(path[0].v), X2 = X(path[0].w), Y2 = Y(path[0].v + dir * leg), Stroke = brush, StrokeThickness = thick, StrokeDashArray = new DoubleCollection { 3, 2 } });
-                        if (leg > 0 && _cfg.Longitudinal.LegAtEnd && ext1 > 0)
+                        if (leg > 0 && _cfg.Longitudinal.LegAtStart)
+                            Children.Add(new Line { X1 = X(path[0].w), Y1 = Y(path[0].v), X2 = X(path[0].w), Y2 = Y(path[0].v + dir * leg), Stroke = brush, StrokeThickness = thick });
+                        if (leg > 0 && _cfg.Longitudinal.LegAtEnd)
                         {
                             var e = path[path.Count - 1];
-                            Children.Add(new Line { X1 = X(e.w), Y1 = Y(e.v), X2 = X(e.w), Y2 = Y(e.v + dir * leg), Stroke = brush, StrokeThickness = thick, StrokeDashArray = new DoubleCollection { 3, 2 } });
+                            Children.Add(new Line { X1 = X(e.w), Y1 = Y(e.v), X2 = X(e.w), Y2 = Y(e.v + dir * leg), Stroke = brush, StrokeThickness = thick });
                         }
                     }
                 }
                 if (ext0 > 0) Text("-" + Mm(ext0) + " mm" + (leg > 0 && _cfg.Longitudinal.LegAtStart ? " + patilla " + Mm(leg) : ""), X(-ext0), Y(vHi) - 30, SectionPreview.CornerBrush, 9);
                 if (ext1 > 0) Text("+" + Mm(ext1) + " mm" + (leg > 0 && _cfg.Longitudinal.LegAtEnd ? " + patilla " + Mm(leg) : ""), X(L) - 10, Y(vHi) - 30, SectionPreview.CornerBrush, 9);
-                if (_cfg.Longitudinal.LegMm > 0 && ((ext0 <= 0 && _cfg.Longitudinal.LegAtStart) || (ext1 <= 0 && _cfg.Longitudinal.LegAtEnd)))
-                    Text("patilla ignorada en los extremos sin prolongacion", 8, H - 14, Brushes.Firebrick, 9);
             }
 
             int n = _runs.Sum(r => r.Count);

@@ -61,8 +61,8 @@ namespace BeamRebar
         private sealed class BastonRow
         {
             public BastonCfg Cfg;
-            public ComboBox Face, Position, Type, Layer;
-            public TextBox Count, Length, Anchor, From, To;
+            public ComboBox Face, Position, Type, Stack;
+            public TextBox Count, Gap, Length, Anchor, From, To;
         }
         private readonly List<BastonCfg> _bastonStore = new List<BastonCfg>();
         private readonly List<BastonRow> _bastonRows = new List<BastonRow>();
@@ -91,7 +91,6 @@ namespace BeamRebar
         private const string SameAsCorner = "(igual que las extremas)";
         private static readonly Thickness Pad = new Thickness(4, 2, 4, 2);
         private static readonly Brush SelectedBrush = RevitTheme.Selection;
-        private static readonly string[] LayerLabels = { "automatica", "capa 1", "capa 2", "capa 3" };
 
         public RebarOptionsWindow(Document doc, AppConfig cfg, IList<string> barTypes, IDictionary<string, double> diametersMm,
                                   IList<string> hookTypes, IDictionary<string, double> hookAngles, IList<HostAnalysis> items)
@@ -476,7 +475,7 @@ namespace BeamRebar
             var group = new GroupBox { Header = "Bastones (refuerzos cortos arriba o abajo: en los apoyos, en el centro o en un tramo)", Padding = new Thickness(4) };
             var panel = new StackPanel();
             _bastonGrid = new Grid();
-            for (int c = 0; c < 10; c++)
+            for (int c = 0; c < 11; c++)
                 _bastonGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             _bastonGrid.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
             panel.Children.Add(_bastonGrid);
@@ -497,11 +496,11 @@ namespace BeamRebar
             panel.Children.Add(_bastonMessage);
             panel.Children.Add(new TextBlock
             {
-                Text = "Cada baston va en la cara superior o inferior, en la capa que se indique o en la primera en la que quepa (en los " +
-                       "huecos entre las barras corridas de esa capa, de forma simetrica; si no cabe, en una capa nueva por dentro). " +
-                       "Longitud en mm, en metros (menor de 5) o como fraccion de la viga (L/4, 0.3L): en inicio/fin/ambos se mide " +
-                       "desde la cara del apoyo hacia el vano y el anclaje sigue dentro del apoyo; en centro es la longitud total " +
-                       "centrada en el vano; en tramo se escriben desde y hasta desde la cara de inicio.",
+                Text = "Cada baston va en la cara superior o inferior, apilado por dentro de las barras corridas de esa cara (tocandolas, " +
+                       "o con el hueco indicado) o intercalado en la misma capa que ellas, en los huecos entre las corridas, de forma " +
+                       "simetrica. Longitud en mm (en metros si es menor de 5): en inicio/fin/ambos se mide desde la cara del apoyo " +
+                       "hacia el vano y el anclaje sigue dentro del apoyo; en centro es la longitud total centrada en el vano; en tramo " +
+                       "se escriben desde y hasta desde la cara de inicio.",
                 TextWrapping = TextWrapping.Wrap, Foreground = RevitTheme.Muted, Margin = new Thickness(4, 4, 4, 0)
             });
             group.Content = panel;
@@ -514,7 +513,7 @@ namespace BeamRebar
             _bastonGrid.RowDefinitions.Clear();
             _bastonRows.Clear();
 
-            string[] headers = { "Cara", "Posicion", "Tipo de barra", "Barras", "Capa", "Longitud", "Anclaje (mm)", "Desde (mm)", "Hasta (mm)", "" };
+            string[] headers = { "Cara", "Posicion", "Tipo de barra", "Barras", "Colocacion", "Hueco (mm)", "Longitud (mm)", "Anclaje (mm)", "Desde (mm)", "Hasta (mm)", "" };
             _bastonGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             for (int c = 0; c < headers.Length; c++)
             {
@@ -526,7 +525,7 @@ namespace BeamRebar
             {
                 _bastonGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 var none = new TextBlock { Text = "Sin bastones. Pulsa \"Anadir baston\" para crear uno.", Foreground = RevitTheme.Muted, Margin = Pad };
-                Grid.SetRow(none, 1); Grid.SetColumn(none, 0); Grid.SetColumnSpan(none, 10);
+                Grid.SetRow(none, 1); Grid.SetColumn(none, 0); Grid.SetColumnSpan(none, 11);
                 _bastonGrid.Children.Add(none);
             }
 
@@ -557,26 +556,33 @@ namespace BeamRebar
                 row.Count.ToolTip = "Numero de barras del baston en la seccion";
                 Put(_bastonGrid, row.Count, r, 3);
 
-                row.Layer = new ComboBox { Margin = Pad, MinWidth = 90 };
-                foreach (string l in LayerLabels) row.Layer.Items.Add(l);
-                row.Layer.SelectedIndex = cfg.LayerIndex;
-                row.Layer.ToolTip = "Capa en la que va el baston: automatica = la primera en la que quepa";
-                Put(_bastonGrid, row.Layer, r, 4);
+                row.Stack = new ComboBox { Margin = Pad, MinWidth = 120 };
+                row.Stack.Items.Add("Apilado por dentro");
+                row.Stack.Items.Add("En la misma capa");
+                row.Stack.SelectedIndex = cfg.Stacked ? 0 : 1;
+                row.Stack.ToolTip = "Apilado por dentro de las barras corridas de su cara (tocandolas o con el hueco indicado), " +
+                                    "o intercalado en la misma capa, en los huecos entre las corridas";
+                Put(_bastonGrid, row.Stack, r, 4);
 
-                row.Length = new TextBox { Text = cfg.Length, Width = 64, Margin = Pad, ToolTip = "mm, metros (menor de 5) o fraccion de la viga: L/4, 0.3L" };
-                Put(_bastonGrid, row.Length, r, 5);
+                row.Gap = NumBox(cfg.GapMm);
+                row.Gap.Width = 56;
+                row.Gap.ToolTip = "Solo apilados: hueco entre el baston y las barras corridas. 0 = tocandolas";
+                Put(_bastonGrid, row.Gap, r, 5);
+
+                row.Length = new TextBox { Text = cfg.Length, Width = 64, Margin = Pad, ToolTip = "Longitud del baston en mm (en metros si es menor de 5)" };
+                Put(_bastonGrid, row.Length, r, 6);
 
                 row.Anchor = NumBox(cfg.AnchorMm);
                 row.Anchor.Width = 64;
                 row.Anchor.ToolTip = "Inicio/fin/ambos: cuanto sigue el baston dentro del apoyo, mas alla de la cara de la viga. 0 = empieza en el recubrimiento del extremo";
-                Put(_bastonGrid, row.Anchor, r, 6);
+                Put(_bastonGrid, row.Anchor, r, 7);
 
                 row.From = NumBox(cfg.FromMm);
                 row.From.Width = 64;
-                Put(_bastonGrid, row.From, r, 7);
+                Put(_bastonGrid, row.From, r, 8);
                 row.To = NumBox(cfg.ToMm);
                 row.To.Width = 64;
-                Put(_bastonGrid, row.To, r, 8);
+                Put(_bastonGrid, row.To, r, 9);
 
                 var remove = new Button { Content = "Quitar", Padding = new Thickness(8, 2, 8, 2), Margin = Pad };
                 BastonCfg captured = cfg;
@@ -587,11 +593,12 @@ namespace BeamRebar
                     _building = true; RebuildBastonTable(); _building = false;
                     Refresh();
                 };
-                Put(_bastonGrid, remove, r, 9);
+                Put(_bastonGrid, remove, r, 10);
 
                 BastonRow rowRef = row;
                 row.Position.SelectionChanged += (s, e) => UpdateBastonRowState(rowRef);
-                foreach (FrameworkElement fe in new FrameworkElement[] { row.Face, row.Position, row.Type, row.Count, row.Layer, row.Length, row.Anchor, row.From, row.To })
+                row.Stack.SelectionChanged += (s, e) => UpdateBastonRowState(rowRef);
+                foreach (FrameworkElement fe in new FrameworkElement[] { row.Face, row.Position, row.Type, row.Count, row.Stack, row.Gap, row.Length, row.Anchor, row.From, row.To })
                     Hook(fe);
                 UpdateBastonRowState(row);
                 _bastonRows.Add(row);
@@ -603,6 +610,7 @@ namespace BeamRebar
             int p = row.Position.SelectedIndex;
             bool ends = p == 0 || p == 1 || p == 2, custom = p == 4;
             row.Length.IsEnabled = !custom;
+            row.Gap.IsEnabled = row.Stack.SelectedIndex == 0;
             row.Anchor.IsEnabled = ends;
             row.From.IsEnabled = custom;
             row.To.IsEnabled = custom;
@@ -621,7 +629,8 @@ namespace BeamRebar
                 c.Position = BastonCfg.Positions[Math.Max(0, Math.Min(4, row.Position.SelectedIndex))];
                 c.BarTypeName = TypeOf(row.Type);
                 if (c.BarTypeName.Length == 0 && requireTypes) errors?.Add(name + ": elige un tipo de barra");
-                c.Layer = row.Layer.SelectedIndex <= 0 ? "auto" : row.Layer.SelectedIndex.ToString(CultureInfo.InvariantCulture);
+                c.Stacked = row.Stack.SelectedIndex == 0;
+                c.GapMm = ReadNum(row.Gap, name + ": hueco", 0, row.Gap.IsEnabled ? errors : null);
                 if (int.TryParse(row.Count.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 1)
                 { c.Count = n; row.Count.ClearValue(Control.BorderBrushProperty); }
                 else { errors?.Add(name + ": numero de barras no valido"); row.Count.BorderBrush = RevitTheme.Error; }
@@ -992,7 +1001,7 @@ namespace BeamRebar
                 RefreshOwn(plan != null && plan.Error == null ? plan : null);
                 foreach (bool top in new[] { true, false })
                     _layerSummary[top].Text = plan == null || plan.Error != null ? "" :
-                        string.Join("   ", plan.LayersOf(top).Select(l => l.Name + ": " + BeamPlan.DescribeLayer(l)));
+                        string.Join("   ", plan.LayersOf(top).Where(l => l.Main > 0).Select(l => l.Name + ": " + BeamPlan.DescribeLayer(l, false)));
                 if (plan != null) _preview.Show(_selected.Section, plan, hookDeg); else _preview.Clear(text);
                 if (runs != null) _elevation.Show(_selected.Section, plan, runs, bastones, scratch); else _elevation.Clear(text);
                 _partitionPreview.Text = "Ejemplo: " + _selected.Partition(scratch, "estribo", "estribo");

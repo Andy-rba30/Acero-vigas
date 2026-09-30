@@ -77,14 +77,19 @@ namespace BeamRebar
         public string BarTypeName { get; set; } = "";
         /// <summary>Numero de barras del baston en la seccion.</summary>
         public int Count { get; set; } = 1;
-        /// <summary>"auto" (la primera capa en la que quepa), "1", "2" o "3".</summary>
-        public string Layer { get; set; } = "auto";
         /// <summary>
-        /// Longitud del baston: en mm ("1500"), en metros si es menor de 5 ("1.5") o como
-        /// fraccion de la longitud de la viga ("L/4", "0.3L"). En inicio/fin/ambos se mide
-        /// desde la cara del apoyo hacia el vano; en centro es la longitud total, centrada.
+        /// true = apilado por dentro de las barras corridas de su cara (tangente a la capa mas
+        /// interior, con GapMm de hueco), como los bastones del add-in de muros; false =
+        /// intercalado en la capa 1, en los huecos entre las barras corridas.
         /// </summary>
-        public string Length { get; set; } = "L/4";
+        public bool Stacked { get; set; } = true;
+        /// <summary>Solo apilados: hueco entre el baston y las barras corridas (mm). 0 = tocandolas.</summary>
+        public double GapMm { get; set; } = 0;
+        /// <summary>
+        /// Longitud del baston en mm ("1500"; en metros si es menor de 5). En inicio/fin/ambos
+        /// se mide desde la cara del apoyo hacia el vano; en centro es la longitud total, centrada.
+        /// </summary>
+        public string Length { get; set; } = "1500";
         /// <summary>Inicio/fin/ambos: prolongacion dentro del apoyo, mas alla de la cara de la viga (mm). 0 = empieza en el recubrimiento del extremo.</summary>
         public double AnchorMm { get; set; } = 0;
         /// <summary>Tramo: desde y hasta, medidos desde la cara de inicio de la viga (mm).</summary>
@@ -112,17 +117,6 @@ namespace BeamRebar
 
         public static readonly string[] Positions = { "start", "end", "both", "center", "custom" };
         public static readonly string[] PositionLabels = { "Inicio", "Fin", "Ambos extremos", "Centro del vano", "Tramo (desde/hasta)" };
-
-        /// <summary>Capa pedida: 0 = automatica.</summary>
-        [JsonIgnore]
-        public int LayerIndex
-        {
-            get
-            {
-                string l = (Layer ?? "").Trim().ToLowerInvariant();
-                return int.TryParse(l, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 1 ? Math.Min(n, 3) : 0;
-            }
-        }
 
         [JsonIgnore]
         public string Describe => (IsTop ? "superior" : "inferior") + " " + PositionLabels[PositionIndex].ToLowerInvariant();
@@ -235,9 +229,9 @@ namespace BeamRebar
                 if (b.BarTypeName == null) b.BarTypeName = "";
                 b.Face = b.IsTop ? "top" : "bottom";
                 b.Position = BastonCfg.Positions[b.PositionIndex];
-                b.Layer = b.LayerIndex == 0 ? "auto" : b.LayerIndex.ToString(CultureInfo.InvariantCulture);
+                if (b.GapMm < 0) b.GapMm = 0;
                 if (b.Count < 1) b.Count = 1;
-                if (string.IsNullOrWhiteSpace(b.Length)) b.Length = "L/4";
+                if (string.IsNullOrWhiteSpace(b.Length)) b.Length = "1500";
                 if (b.AnchorMm < 0) b.AnchorMm = 0;
                 if (b.FromMm < 0) b.FromMm = 0;
                 if (b.ToMm < 0) b.ToMm = 0;

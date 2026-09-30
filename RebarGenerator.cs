@@ -200,8 +200,6 @@ namespace BeamRebar
             double ext0 = Mm(L.StartExtensionMm), ext1 = Mm(L.EndExtensionMm);
             double endCover = Mm(L.EndCoverMm);
             double leg = Mm(L.LegMm);
-            if (L.LegMm > 0 && ((L.LegAtStart && ext0 <= 0) || (L.LegAtEnd && ext1 <= 0)))
-                c.Result.Warnings.Add("la patilla se ignora en los extremos sin prolongacion");
 
             foreach ((PlanBar first, int count, double step) in c.Plan.ArrayRows(c.Tol))
             {
@@ -216,7 +214,7 @@ namespace BeamRebar
                 else
                 {
                     ranges.Add((ext0 > 0 ? -ext0 : endCover, ext1 > 0 ? s.Length + ext1 : s.Length - endCover, "",
-                                leg > 0 && L.LegAtStart && ext0 > 0, leg > 0 && L.LegAtEnd && ext1 > 0, first.Top ? "superior" : "inferior"));
+                                leg > 0 && L.LegAtStart, leg > 0 && L.LegAtEnd, first.Top ? "superior" : "inferior"));
                 }
 
                 foreach ((double w0, double w1, string label, bool legStart, bool legEnd, string face) in ranges)

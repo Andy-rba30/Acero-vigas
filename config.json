@@ -23,7 +23,10 @@
     "minClearMm": 25
   },
 
-  "bastones": [],
+  "bastones": [
+    { "face": "top", "position": "both", "barTypeName": "", "count": 1, "stacked": true, "gapMm": 0,
+      "length": "1500", "anchorMm": 0, "fromMm": 0, "toMm": 0 }
+  ],
 
   "stirrups": {
     "barTypeName": "",
