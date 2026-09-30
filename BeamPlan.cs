@@ -344,13 +344,7 @@ namespace BeamRebar
                 double uL = inU1 + 0.5 * db, uR = inU2 - 0.5 * db;
                 if (count == 1) { result.Add(0.5 * (uL + uR)); return result; }
                 int cap = (int)Math.Floor((inU2 - inU1 - clear + 1e-9) / (db + clear));
-                if (cap < count)
-                {
-                    if (!force) return null;
-                    missing = count - Math.Max(1, cap);
-                    count = Math.Max(1, cap);
-                    if (count == 1) { result.Add(0.5 * (uL + uR)); return result; }
-                }
+                if (cap < count && !force) return null;   // con force se colocan igual y la comprobacion de separacion avisa
                 for (int i = 0; i < count; i++) result.Add(uL + (uR - uL) * i / (count - 1));
                 return result;
             }
@@ -369,8 +363,8 @@ namespace BeamRebar
             if (total < count)
             {
                 if (!force) return null;
-                missing = count - total;
-                count = total;
+                // se colocan igual, en los huecos mas anchos; la comprobacion de separacion libre avisa
+                for (int i = 0; i < n; i++) cap2[i] = count;
             }
 
             // reparto simetrico: pares de huecos simetricos respecto al centro, el mas cercano primero; el central para la barra impar

@@ -162,12 +162,12 @@ namespace BeamRebar
                 BastonCfg b = cfg.Bastones[i];
                 string name = "baston " + (i + 1) + " (" + b.Describe + ")";
                 int pos = b.PositionIndex;
-                if (pos == 4)
+                if (pos == 3 && (b.FromMm > 0 || b.ToMm > 0))
                 {
-                    double a = Mm(b.FromMm), z = Mm(b.ToMm);
-                    if (z - a < Mm(50)) { errors.Add(name + ": el tramo desde/hasta no es valido"); continue; }
-                    if (z > L + 1e-9) { errors.Add(name + ": el tramo termina mas alla del final de la viga (" + ToMm(L) + " mm)"); continue; }
-                    list.Add(new BastonRange { Index = i, Cfg = b, W0 = a, W1 = z, Label = "tramo " + b.FromMm.ToString("0") + "-" + b.ToMm.ToString("0") });
+                    // centro con longitudes distintas hacia cada lado
+                    double a = 0.5 * L - Mm(b.FromMm), z = 0.5 * L + Mm(b.ToMm);
+                    if (a < 0 || z > L + 1e-9) { errors.Add(name + ": las longitudes hacia inicio / fin se salen de la viga"); continue; }
+                    list.Add(new BastonRange { Index = i, Cfg = b, W0 = a, W1 = z, Label = "centro " + b.FromMm.ToString("0") + "+" + b.ToMm.ToString("0") });
                     continue;
                 }
                 if (!StirrupLayout.TryLength(b.Length, L * BeamSection.MmPerFt, out double lenMm, out string lerr)) { errors.Add(name + ": " + lerr); continue; }

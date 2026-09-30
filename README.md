@@ -77,8 +77,8 @@ ninguna barra. Un cambio de sección en un tramo más corto que dos estaciones p
 - **Bastones**: barras cortas de refuerzo en la cara superior o inferior, con su tipo,
   su número de barras y su tramo: **inicio**, **fin** o **ambos extremos** (longitud desde
   la cara del apoyo hacia el vano, más un **anclaje** dentro del apoyo más allá de la
-  cara), **centro del vano** (longitud total centrada) o **tramo** (desde / hasta desde la
-  cara de inicio). La longitud se escribe en mm (`1500`; en metros si es menor de 5).
+  cara) o **centro del vano** (longitud total centrada, o dos longitudes distintas hacia
+  el inicio y hacia el fin desde el centro para armados especiales). La longitud se escribe en mm (`1500`; en metros si es menor de 5).
   Como en el add-in de muros, cada bastón va **apilado por dentro** de la capa 1 de su
   cara (tocándola, o con el **hueco** que se indique), en el hueco central que dejan las
   capas 2 y 3 a esa altura
@@ -194,7 +194,7 @@ Armar avisa de qué falta.
 }
 ```
 
-`face`: `top` / `bottom`. `position`: `start`, `end`, `both`, `center` o `custom`.
+`face`: `top` / `bottom`. `position`: `start`, `end`, `both` o `center` (`fromMm` / `toMm` = longitudes hacia inicio y fin desde el centro).
 `stacked`: `true` (apilado por dentro, con `gapMm` de hueco) o `false` (en la misma capa). Los nombres de tipo de barra y de gancho pueden ser
 exactos o un fragmento (`"135"`, `"3/8"`); sin coincidencia no se arma, nunca se
 sustituye por otro tipo.

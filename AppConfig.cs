@@ -100,7 +100,7 @@ namespace BeamRebar
         public string Length { get; set; } = "1500";
         /// <summary>Inicio/fin/ambos: prolongacion dentro del apoyo, mas alla de la cara de la viga (mm). 0 = empieza en el recubrimiento del extremo.</summary>
         public double AnchorMm { get; set; } = 0;
-        /// <summary>Tramo: desde y hasta, medidos desde la cara de inicio de la viga (mm).</summary>
+        /// <summary>Solo centro: longitudes distintas hacia el inicio y hacia el fin, medidas desde el centro del vano (mm). Con las dos en 0 se usa Length centrada.</summary>
         public double FromMm { get; set; } = 0;
         public double ToMm { get; set; } = 0;
 
@@ -118,13 +118,12 @@ namespace BeamRebar
                 if (p == "start" || p == "inicio") return 0;
                 if (p == "end" || p == "fin") return 1;
                 if (p == "center" || p == "centro") return 3;
-                if (p == "custom" || p == "tramo") return 4;
                 return 2;
             }
         }
 
-        public static readonly string[] Positions = { "start", "end", "both", "center", "custom" };
-        public static readonly string[] PositionLabels = { "Inicio", "Fin", "Ambos extremos", "Centro del vano", "Tramo (desde/hasta)" };
+        public static readonly string[] Positions = { "start", "end", "both", "center" };
+        public static readonly string[] PositionLabels = { "Inicio", "Fin", "Ambos extremos", "Centro del vano" };
 
         [JsonIgnore]
         public string Describe => (IsTop ? "superior" : "inferior") + " " + PositionLabels[PositionIndex].ToLowerInvariant();

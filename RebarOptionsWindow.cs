@@ -541,15 +541,13 @@ namespace BeamRebar
             panel.Children.Add(add);
             _bastonMessage = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 2, 4, 0), Foreground = RevitTheme.Error };
             panel.Children.Add(_bastonMessage);
-            _bastonPreview = new BastonPreview { Height = 130, Margin = new Thickness(4, 6, 4, 2) };
-            panel.Children.Add(new Border { BorderBrush = RevitTheme.Border, BorderThickness = new Thickness(1), Child = _bastonPreview });
             panel.Children.Add(new TextBlock
             {
                 Text = "Cada baston va en la cara superior o inferior, apilado por dentro de las barras corridas de esa cara (tocandolas, " +
                        "o con el hueco indicado) o intercalado en la misma capa que ellas, en los huecos entre las corridas, de forma " +
                        "simetrica. Longitud en mm (en metros si es menor de 5): en inicio/fin/ambos se mide desde la cara del apoyo " +
-                       "hacia el vano y el anclaje sigue dentro del apoyo; en centro es la longitud total centrada en el vano; en tramo " +
-                       "se escriben desde y hasta desde la cara de inicio.",
+                       "hacia el vano y el anclaje sigue dentro del apoyo; en centro es la longitud total centrada en el vano, o, si se " +
+                       "escriben \"hacia inicio\" y \"hacia fin\", esas dos longitudes desde el centro del vano (armados especiales).",
                 TextWrapping = TextWrapping.Wrap, Foreground = RevitTheme.Muted, Margin = new Thickness(4, 4, 4, 0)
             });
             group.Content = panel;
@@ -562,7 +560,7 @@ namespace BeamRebar
             _bastonGrid.RowDefinitions.Clear();
             _bastonRows.Clear();
 
-            string[] headers = { "Cara", "Posicion", "Tipo de barra", "Barras", "Colocacion", "Hueco (mm)", "Longitud (mm)", "Anclaje (mm)", "Desde (mm)", "Hasta (mm)", "" };
+            string[] headers = { "Cara", "Posicion", "Tipo de barra", "Barras", "Colocacion", "Hueco (mm)", "Longitud (mm)", "Anclaje (mm)", "Hacia inicio (mm)", "Hacia fin (mm)", "" };
             _bastonGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             for (int c = 0; c < headers.Length; c++)
             {
@@ -606,8 +604,8 @@ namespace BeamRebar
                 Put(_bastonGrid, row.Count, r, 3);
 
                 row.Stack = new ComboBox { Margin = Pad, MinWidth = 120 };
-                row.Stack.Items.Add("Apilado por dentro");
-                row.Stack.Items.Add("En la misma capa");
+                row.Stack.Items.Add("Por dentro de las corridas (2a capa)");
+                row.Stack.Items.Add("Entre las corridas (misma capa)");
                 row.Stack.SelectedIndex = cfg.Stacked ? 0 : 1;
                 row.Stack.ToolTip = "Apilado por dentro de las barras corridas de su cara (tocandolas o con el hueco indicado), " +
                                     "o intercalado en la misma capa, en los huecos entre las corridas";
@@ -657,8 +655,10 @@ namespace BeamRebar
         private static void UpdateBastonRowState(BastonRow row)
         {
             int p = row.Position.SelectedIndex;
-            bool ends = p == 0 || p == 1 || p == 2, custom = p == 4;
-            row.Length.IsEnabled = !custom;
+            bool ends = p == 0 || p == 1 || p == 2, custom = p == 3;
+            row.Length.IsEnabled = true;
+            row.From.ToolTip = "Solo centro: longitud desde el centro del vano hacia el inicio. Con las dos en 0 se usa la longitud total centrada";
+            row.To.ToolTip = "Solo centro: longitud desde el centro del vano hacia el fin";
             row.Gap.IsEnabled = row.Stack.SelectedIndex == 0;
             row.Anchor.IsEnabled = ends;
             row.From.IsEnabled = custom;
@@ -675,7 +675,7 @@ namespace BeamRebar
                 BastonCfg c = row.Cfg;
                 string name = "baston " + i;
                 c.Face = row.Face.SelectedIndex == 1 ? "bottom" : "top";
-                c.Position = BastonCfg.Positions[Math.Max(0, Math.Min(4, row.Position.SelectedIndex))];
+                c.Position = BastonCfg.Positions[Math.Max(0, Math.Min(3, row.Position.SelectedIndex))];
                 c.BarTypeName = TypeOf(row.Type);
                 if (c.BarTypeName.Length == 0 && requireTypes) errors?.Add(name + ": elige un tipo de barra");
                 c.Stacked = row.Stack.SelectedIndex == 0;
@@ -688,9 +688,9 @@ namespace BeamRebar
                 { errors?.Add(name + ": " + lerr); row.Length.BorderBrush = RevitTheme.Error; }
                 else row.Length.ClearValue(Control.BorderBrushProperty);
                 c.AnchorMm = ReadNum(row.Anchor, name + ": anclaje", 0, row.Anchor.IsEnabled ? errors : null);
-                c.FromMm = ReadNum(row.From, name + ": desde", 0, row.From.IsEnabled ? errors : null);
-                c.ToMm = ReadNum(row.To, name + ": hasta", 0, row.To.IsEnabled ? errors : null);
-                if (row.To.IsEnabled && c.ToMm <= c.FromMm) { errors?.Add(name + ": \"hasta\" tiene que ser mayor que \"desde\""); row.To.BorderBrush = RevitTheme.Error; }
+                c.FromMm = ReadNum(row.From, name + ": hacia inicio", 0, row.From.IsEnabled ? errors : null);
+                c.ToMm = ReadNum(row.To, name + ": hacia fin", 0, row.To.IsEnabled ? errors : null);
+                if (row.To.IsEnabled && (c.FromMm > 0) != (c.ToMm > 0)) { errors?.Add(name + ": escribe las dos longitudes (hacia inicio y hacia fin) o deja las dos en 0"); row.To.BorderBrush = RevitTheme.Error; }
             }
         }
 
@@ -784,6 +784,13 @@ namespace BeamRebar
             elvGroup.Content = new Border { BorderBrush = RevitTheme.Border, BorderThickness = new Thickness(1), Child = _elevation };
             Grid.SetRow(elvGroup, 1);
             grid.Children.Add(elvGroup);
+
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0.55, GridUnitType.Star) });
+            var bGroup = new GroupBox { Header = "Alzado: solo los bastones", Padding = new Thickness(4), Margin = new Thickness(0, 6, 0, 0) };
+            _bastonPreview = new BastonPreview { MinHeight = 90 };
+            bGroup.Content = new Border { BorderBrush = RevitTheme.Border, BorderThickness = new Thickness(1), Child = _bastonPreview };
+            Grid.SetRow(bGroup, 2);
+            grid.Children.Add(bGroup);
             return grid;
         }
 
