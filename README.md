@@ -111,6 +111,44 @@ capa, sus intermedias, las de un bastón) se crean como un solo conjunto de Revi
 - Los estribos siguen la sección de cada estación: en los tramos constantes se crean
   como arrays; en las cartelas, uno a uno con su canto.
 
+## Empalmes por longitud comercial (`SpliceLayout`)
+
+En obra las barras vienen de una longitud comercial (normalmente **9 m**), así que una
+corrida más larga se hace con dos o más barras **empalmadas por traslape**. El add-in lo
+reproduce (ACI 318-19):
+
+- Cada barra corrida (prolongaciones incluidas) más larga que la **longitud comercial**
+  se parte en los trozos justos de como mucho esa longitud, solapados la **longitud de
+  empalme a tracción** `lst`. Los bastones no se empalman (si uno es más largo que la
+  barra comercial, se avisa).
+- `lst` se calcula por diámetro: `ld` según 25.4.2.3 (expresiones simplificadas, con
+  `ψt = 1.3` si la barra tiene más de 300 mm de hormigón fresco debajo, es decir las
+  superiores y las laterales altas; `ψe = λ = 1`; `ψg` según el grado del acero;
+  `√f'c ≤ 8.3 MPa`; `ld ≥ 300 mm`) y empalme **clase B = 1.3 ld** (todas las barras de
+  una capa se empalman en la misma sección) o clase A = 1.0 ld, mínimo 300 mm,
+  redondeado hacia arriba a 50 mm. `f'c` y `fy` se escriben en kg/cm² (210 y 4200 por
+  defecto). También se puede dar una **longitud fija** para todos los diámetros (la de la
+  tabla del plano). Con f'c 210 y fy 4200: Ø1/2" 750 / 950 mm, Ø5/8" 900 / 1200 mm,
+  Ø3/4" 1100 / 1400 mm, Ø1" 1800 / 2300 mm (barra baja / barra alta).
+- **Zona de empalme**, por cara: las **superiores en el tercio central** de la luz (ahí
+  el momento negativo es pequeño) y las **inferiores en los cuartos extremos**, con el
+  empalme acabando en `L/4` desde la cara del apoyo y, si cabe, fuera de `2h` desde esa
+  cara (zona de rótula); las laterales van en el tercio central. Cada zona se puede
+  cambiar en la ventana. Con un empalme basta hasta una barra de `2·Lc − lst`; una
+  inferior más larga lleva un empalme en cada cuarto extremo. Si los empalmes no caben
+  en su zona se reparten por igual a lo largo de la barra y la fila de la viga lo avisa.
+- Geometría como en obra: el primer trozo sigue la línea de la barra; el siguiente va
+  **pegado por dentro** (desplazado un diámetro hacia el interior de la sección) durante
+  el solape y vuelve a la línea con una **bayoneta** de pendiente 1:6. Las patillas van
+  solo en el primer y en el último trozo. Cada trozo es un conjunto de Revit propio
+  (con su array), con el mismo nombre de conjunto que la barra entera.
+- El alzado dibuja los trozos con sus bayonetas y una etiqueta `empalme 1100` con la
+  longitud, y la fila de cada viga resume los empalmes (`empalmes: superiores 1 x 1400
+  mm (3/4) en el tercio central; inferiores 1 x 1100 mm (3/4) cerca de los apoyos`).
+
+Con **Longitud comercial de barra = 0** no se empalma nada y las corridas se crean de una
+pieza como antes.
+
 ## Distribución de estribos (`StirrupLayout`)
 
 Se escribe como en los planos y **desde cada apoyo**: **`1@50, 8@100, R@200`** = el
@@ -147,8 +185,10 @@ El informe final dice, viga a viga, qué se ha creado y por qué se ha rechazado
 - **Barras longitudinales corridas**: tabla de capas de la cara superior y de la
   inferior (extremas, intermedias, total; añadir / quitar capa), con el resumen de cada
   capa como en los planos; prolongaciones, recubrimiento en extremos, patilla,
-  separaciones entre capas y entre barras; cuadro de **barras por capa de la viga
-  seleccionada**.
+  separaciones entre capas y entre barras; **empalmes por traslape** (longitud
+  comercial, f'c, fy, clase, longitud fija y zona de empalme de cada cara, con la
+  longitud de empalme resultante de cada tipo de barra en uso); cuadro de **barras por
+  capa de la viga seleccionada**.
 - **Bastones**: tabla con un bastón por fila (cara, posición, tipo, barras, capa,
   longitud, anclaje, desde / hasta) con botones para añadir y quitar; debajo, los avisos.
 - **Estribos**: tipo, gancho, giro del gancho, distribución, simetría y desfases.
@@ -186,6 +226,8 @@ Armar avisa de qué falta.
     { "face": "top", "position": "both", "barTypeName": "", "count": 1, "stacked": true, "gapMm": 0,
       "length": "1500", "anchorMm": 0, "fromMm": 0, "toMm": 0 }
   ],
+  "splices":    { "commercialLengthMm": 9000, "fcKgCm2": 210, "fyKgCm2": 4200, "classB": true,
+                  "fixedLengthMm": 0, "topZone": "center", "bottomZone": "ends" },
   "stirrups":   { "barTypeName": "", "hookTypeName": "135", "hookOrientation": "left",
                   "distribution": "1@50, 8@100, R@200", "symmetric": true,
                   "startOffsetMm": 0, "endOffsetMm": 0 },
@@ -196,7 +238,9 @@ Armar avisa de qué falta.
 ```
 
 `face`: `top` / `bottom`. `position`: `start`, `end`, `both` o `center` (`fromMm` / `toMm` = longitudes hacia inicio y fin desde el centro).
-`stacked`: `true` (apilado por dentro, con `gapMm` de hueco) o `false` (en la misma capa). Los nombres de tipo de barra y de gancho pueden ser
+`stacked`: `true` (apilado por dentro, con `gapMm` de hueco) o `false` (en la misma capa).
+`splices`: `commercialLengthMm` 0 = sin empalmes; `fixedLengthMm` 0 = calcular `lst` según ACI 318-19 con `fcKgCm2`, `fyKgCm2` y `classB`;
+`topZone` / `bottomZone`: `center` (tercio central) o `ends` (cuartos extremos). Los nombres de tipo de barra y de gancho pueden ser
 exactos o un fragmento (`"135"`, `"3/8"`); sin coincidencia no se arma, nunca se
 sustituye por otro tipo.
 
@@ -224,6 +268,7 @@ Herramientas externas.
 | `BeamProfile.cs` | Perfil de la viga a lo largo del eje: tramos constantes, cartelas lineales y escalones a partir de las estaciones. Pura. |
 | `BeamPlan.cs` | Armado de la sección (estribo, capas, bastones por capa) y trayectorias de las barras a lo largo de la viga (`BarPaths`). Pura, compartida por ventana y generador. |
 | `StirrupLayout.cs` | Lectura de `1@50, 8@100, R@200` desde los dos apoyos, cotas de los estribos y longitudes `L/4`. Pura. |
+| `SpliceLayout.cs` | Empalmes por traslape: longitud de desarrollo y de empalme (ACI 318-19) por diámetro, y reparto de los trozos de una barra más larga que la comercial en su zona de empalme. Pura. |
 | `BeamSection.cs` | Lectura del sólido de Revit: eje, rebanadas perpendiculares, límites de tramo, geometría completa si está unida. |
 | `HostAnalysis.cs` | Resultado por elemento (perfil o motivo de rechazo) y elecciones por viga. |
 | `RebarGenerator.cs` | Crea los `Rebar` (corridas, bastones, estribos) con las dos redes de seguridad y la inversión automática de ganchos. |
@@ -231,7 +276,7 @@ Herramientas externas.
 | `ArmarVigaCommand.cs`, `RibbonApp.cs` | Comando externo y pestaña de la cinta. |
 | `AppConfig.cs`, `PartitionName.cs` | Configuración y plantilla de Partición. |
 
-Las clases puras (`Rectilinear`, `BeamProfile`, `BeamPlan`, `StirrupLayout`, `AppConfig`)
+Las clases puras (`Rectilinear`, `BeamProfile`, `BeamPlan`, `StirrupLayout`, `SpliceLayout`, `AppConfig`)
 no dependen de Revit y se pueden probar en un programa de consola.
 
 ## Limitaciones conocidas
@@ -242,4 +287,6 @@ no dependen de Revit y se pueden probar en un programa de consola.
 - Las barras corridas cruzan los escalones con bayoneta; si el detalle de obra es otro
   (barras ancladas por separado), habrá que retocarlas a mano.
 - No hace comprobaciones estructurales: decide las cuantías y las longitudes tú; esto
-  solo modela lo que eliges en la ventana.
+  solo modela lo que eliges en la ventana. La longitud de empalme usa las expresiones
+  simplificadas de ACI 318-19 (sin el término `cb + Ktr`) y no escalona los empalmes de
+  una misma capa (de ahí la clase B por defecto): revísala contra tu plano.
