@@ -11,8 +11,11 @@ Es el hermano del add-in de columnas
 contención ([Acero-automatico](https://github.com/Andy-rba30/Acero-automatico)): misma
 base (lectura del sólido con rebanadas, ventana previa con esquema y tema oscuro de
 Revit, red de seguridad que deshace el elemento entero si una barra queda fuera del
-hormigón, `config.json`) y los tres comparten la pestaña **ARBA** y el desplegable
-**Acero** de la cinta.
+hormigón, `config.json`). Todos los add-ins ARBA comparten el código común
+[ARBA-comun](https://github.com/Andy-rba30/ARBA-comun) (submódulo `external/ARBA-comun`,
+contrato **1.0.0**): la pestaña **ARBA** y el desplegable **Acero** de la cinta, el tema
+oscuro, la regla de **Partición** y los parámetros compartidos `ARBA - Origen`,
+`ARBA - Código` y `Metrado - Elemento` con los que el plugin de metrados agrupa el acero.
 
 Antes de crear nada abre una **ventana** en la que se ve qué se ha detectado en cada
 viga seleccionada y se elige el armado: capas de barras de cada cara, bastones,
@@ -194,7 +197,10 @@ El informe final dice, viga a viga, qué se ha creado y por qué se ha rechazado
 - **Estribos**: tipo, gancho, giro del gancho, distribución, simetría y desfases.
 - **Recubrimiento, geometría unida y partición**: recubrimiento al estribo, cómo tratar
   la geometría unida (al cambiarlo se vuelven a leer todas las vigas) y plantilla del
-  parámetro Partición (`{marca}`, `{id}`, `{tipo}`, `{familia}`, `{conjunto}`, `{cara}`).
+  parámetro Partición (`{categoria}`, `{prefijo}`, `{marca}`, `{id}`, `{codigo}` = `{cara}`,
+  `{tipo}`, `{familia}`, `{conjunto}`), con un ejemplo de la viga seleccionada y un aviso
+  en rojo si la plantilla no cumple el contrato ARBA. En el pie de la ventana se ve la
+  versión del contrato con la que se compiló el add-in.
 - **Sección**: hormigón de la sección de referencia (la más cercana al centro del vano),
   el estribo con sus ganchos dibujados con el ángulo del tipo elegido, cada barra a su
   diámetro (rojo oscuro las extremas, naranja las intermedias, morado los bastones) y las
@@ -232,7 +238,7 @@ Armar avisa de qué falta.
                   "distribution": "1@50, 8@100, R@200", "symmetric": true,
                   "startOffsetMm": 0, "endOffsetMm": 0 },
   "joinedGeometry": "auto",
-  "partitionTemplate": "VIG-{marca}",
+  "partitionTemplate": "{categoria} - {prefijo}-{marca}",
   "probeSliceMm": 10, "prismCheckStepMm": 250, "prismCheckToleranceMm": 2, "rectilinearAngleDeg": 0.5
 }
 ```
@@ -244,21 +250,68 @@ Armar avisa de qué falta.
 exactos o un fragmento (`"135"`, `"3/8"`); sin coincidencia no se arma, nunca se
 sustituye por otro tipo.
 
+## Partición, origen y metrado (contrato ARBA-comun 1.0.0)
+
+Cada conjunto creado (corridas y sus trozos empalmados, bastones, laterales y estribos)
+sale marcado según el [contrato ARBA](https://github.com/Andy-rba30/ARBA-comun/blob/main/CONTRATO.md):
+
+| Parámetro | Valor | Para qué |
+|---|---|---|
+| **Partición** | `VIGAS - VIG-V-101` (`{categoria} - {prefijo}-{marca}`; sin Marca, el Id: `VIGAS - VIG-1234`) | Agrupación en las tablas "Metrado acero - Vigas" del plugin de metrados. Se escribe en el parámetro predefinido, así funciona también en Revit en español (antes se buscaba `Partition` por nombre y no se escribía nada). |
+| **ARBA - Origen** | `VIGAS` | Quién creó la barra. Es lo que el add-in usa para reconocer *su* armadura al rearmar. |
+| **ARBA - Código** | `superior`, `inferior`, `lateral`, `baston` o `estribo` | La cara, fuera de la partición (una partición por viga). |
+| **Metrado - Elemento** | `VIGAS` | Filtro real de las tablas y filtros de vista del plugin de metrados. |
+
+La **categoría** la deduce el código común de la categoría del anfitrión (armazón
+estructural → `VIGAS`); el prefijo `VIG` lo pone el add-in. Los tres parámetros son
+compartidos de ejemplar con GUID fijo (grupo Datos); el comando los crea en el proyecto
+si faltan, sin tocar el archivo de parámetros compartidos del usuario. Una plantilla que
+no empiece por `{categoria} - {prefijo}-` incumple el contrato: la ventana lo avisa y el
+informe también, pero las barras se crean igual.
+
+**Rearmar una viga.** Si alguna de las vigas seleccionadas ya tiene conjuntos con
+`ARBA - Origen = VIGAS`, el comando pregunta una vez, para todas: **Borrar la armadura
+del add-in y rearmar** (se borran sus conjuntos dentro de la subtransacción de cada viga,
+antes de armarla; si la viga se rechaza, se deshace también el borrado y conserva lo que
+tenía) o **Conservar y armar encima** (duplica). Las barras de otros add-ins o modeladas
+a mano no se tocan.
+
+**Migrar modelos anteriores.** Las barras creadas con versiones anteriores llevan la
+partición antigua (`VIG-V1`) y no tienen `ARBA - Origen`, así que el add-in no las
+reconoce como suyas. Al armar una viga que las tiene, ofrece **Migrar sin rearmar**
+(reescribe la partición como `VIGAS - VIG-V1`, rellena `ARBA - Origen`, `ARBA - Código`
+y `Metrado - Elemento`, sin crear ni borrar barras; en esa viga no se arma nada),
+**Migrar y rearmar** (migra y después pregunta borrar / conservar) o **dejarlas como
+están y armar encima**. El plugin de metrados trae además el botón **Migrar particiones
+y origen** para migrar todo el modelo de una vez. Ctrl+Z deshace cualquiera de las dos.
+
 ## Compilar e instalar
 
 Requiere el SDK de .NET 10 y Revit 2027 (los paquetes `Nice3point.Revit.Api.*`
 traen las DLL de la API; para Revit 2025/2026 cambia el `TargetFramework` a
-`net8.0-windows` y la versión del paquete).
+`net8.0-windows`, la versión del paquete y `<RevitVersion>`).
+
+El código común se toma del **submódulo** `external/ARBA-comun` (etiqueta `v1.0.0`), que
+`BeamRebar.csproj` importa con `Arba.Comun.props` y compila como fuente dentro de
+`BeamRebar.dll` (nunca como DLL aparte: Revit carga todos los add-ins en el mismo
+proceso). Hay que clonar con el submódulo:
 
 ```
+git clone --recurse-submodules https://github.com/Andy-rba30/Acero-vigas
+# o, en un clon ya hecho:
+git submodule update --init
 dotnet build -c Debug
 ```
 
-En Debug la compilación copia `BeamRebar.dll`, `config.json` y `BeamRebar.addin`
-a `%AppData%\Autodesk\Revit\Addins\2027\`. Al abrir Revit aparece la pestaña **ARBA**
-con el botón **Vigas** en el desplegable **Acero** (comparte la pestaña con los add-ins
-de columnas y muros si están instalados) y el comando queda también en Complementos >
-Herramientas externas.
+Para subir de versión el común: `git -C external/ARBA-comun checkout v1.1.0` y commit del
+puntero. No se modifica nada dentro de `external/ARBA-comun` desde este repo.
+
+En Debug (solo en Windows) la compilación copia `BeamRebar.dll`, `config.json` y
+`BeamRebar.addin` a `%AppData%\Autodesk\Revit\Addins\2027\`. Al abrir Revit aparece
+la pestaña **ARBA** con el botón **Vigas** en el desplegable **Acero** (la misma pestaña,
+panel y desplegable que los demás add-ins ARBA instalados) y el comando queda también en
+Complementos > Herramientas externas. `dotnet build -c Release` compila también en
+Linux/macOS (sin copiar nada).
 
 ## Estructura del código
 
@@ -272,9 +325,10 @@ Herramientas externas.
 | `BeamSection.cs` | Lectura del sólido de Revit: eje, rebanadas perpendiculares, límites de tramo, geometría completa si está unida. |
 | `HostAnalysis.cs` | Resultado por elemento (perfil o motivo de rechazo) y elecciones por viga. |
 | `RebarGenerator.cs` | Crea los `Rebar` (corridas, bastones, estribos) con las dos redes de seguridad y la inversión automática de ganchos. |
-| `RebarOptionsWindow.cs`, `SectionPreview.cs`, `ElevationPreview.cs`, `RevitTheme.cs` | Ventana y esquemas (WPF en código, sin XAML) con el tema oscuro de Revit. |
-| `ArmarVigaCommand.cs`, `RibbonApp.cs` | Comando externo y pestaña de la cinta. |
-| `AppConfig.cs`, `PartitionName.cs` | Configuración y plantilla de Partición. |
+| `RebarOptionsWindow.cs`, `SectionPreview.cs`, `ElevationPreview.cs`, `BastonPreview.cs` | Ventana y esquemas (WPF en código, sin XAML) con el tema oscuro de Revit (`RevitTheme` del común). |
+| `ArmarVigaCommand.cs`, `RibbonApp.cs` | Comando externo (parámetros del contrato, borrar y rearmar, migración) y botón **Vigas** con su icono; la pestaña y el desplegable los gestiona `ArbaRibbon` del común. |
+| `AppConfig.cs` | Configuración (`config.json`). |
+| `external/ARBA-comun/src/` | Código común ARBA (submódulo): `ArbaContract`, `ArbaPartition` + `PartitionName` (partición), `ArbaOrigin` (origen / código / borrar lo propio), `ArbaSharedParams` (parámetros compartidos), `ArbaMigration`, `ArbaRibbon`, `RevitTheme`, `NameMatch` (tipos de barra y gancho por nombre o fragmento). |
 
 Las clases puras (`Rectilinear`, `BeamProfile`, `BeamPlan`, `StirrupLayout`, `SpliceLayout`, `AppConfig`)
 no dependen de Revit y se pueden probar en un programa de consola.

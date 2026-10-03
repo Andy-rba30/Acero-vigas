@@ -52,7 +52,7 @@
 
   "joinedGeometry": "auto",
 
-  "partitionTemplate": "VIG-{marca}",
+  "partitionTemplate": "{categoria} - {prefijo}-{marca}",
 
   "probeSliceMm": 10,
   "prismCheckStepMm": 250,

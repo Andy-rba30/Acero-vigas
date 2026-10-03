@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Arba.Comun;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Structure;
 
@@ -83,7 +84,7 @@ namespace BeamRebar
             {
                 if (!types.TryGetValue(name ?? "", out RebarBarType bt))
                 {
-                    bt = FindBarType(doc, name, use);
+                    bt = FindBarType(doc, name, use, c.Result.Warnings);
                     types[name ?? ""] = bt;
                 }
                 return bt;
@@ -104,8 +105,8 @@ namespace BeamRebar
             foreach (string t in item.BarTypeOverrides.Values.Distinct(StringComparer.OrdinalIgnoreCase)) Type(t, "barras con tipo asignado");
             int sidePairs = item.OwnSide() >= 0 ? item.OwnSide() : cfg.SideBars.Pairs;
             if (sidePairs > 0) Type(cfg.SideBars.BarTypeName, "barras laterales");
-            RebarBarType btStirrup = FindBarType(doc, cfg.Stirrups.BarTypeName, "estribos");
-            c.Hook = FindHookType(doc, cfg.Stirrups.HookTypeName);
+            RebarBarType btStirrup = FindBarType(doc, cfg.Stirrups.BarTypeName, "estribos", c.Result.Warnings);
+            c.Hook = FindHookType(doc, cfg.Stirrups.HookTypeName, c.Result.Warnings);
 
             double Dia(string name) => types.TryGetValue(name ?? "", out RebarBarType bt) ? bt.BarNominalDiameter : 0;
             c.Plan = PlanFor(item, cfg, Dia, btStirrup.BarNominalDiameter, 0);
@@ -472,7 +473,7 @@ namespace BeamRebar
                     }
                 }
 
-                Finish(c.Doc, rb, c.Item.Partition(c.Cfg, SetName(name), face));
+                Finish(c, rb, c.Item.Partition(c.Cfg, SetName(name), face), face);
                 c.Result.Created.Add(new CreatedSet { Id = rb.Id, Name = name, Radius = r, Longitudinal = longitudinal });
                 return true;
             }
@@ -625,46 +626,63 @@ namespace BeamRebar
             }
         }
 
-        private static void Finish(Document doc, Rebar r, string partition)
+        /// <summary>
+        /// Marca un conjunto recien creado segun el contrato ARBA-comun: Particion (parametro predefinido, asi se
+        /// escribe tambien en Revit en espanol), "ARBA - Origen" = VIGAS, "ARBA - Codigo" = cara (superior /
+        /// inferior / lateral / baston / estribo) y "Metrado - Elemento" = categoria del anfitrion (VIGAS).
+        /// Todos los conjuntos pasan por aqui desde Place: corridas y sus trozos empalmados, bastones, laterales
+        /// y estribos. Los parametros del contrato los asegura el comando antes de armar.
+        /// </summary>
+        private static void Finish(Ctx c, Rebar r, string partition, string face)
         {
-            Parameter p = r.LookupParameter("Partition");
-            if (p != null && !p.IsReadOnly && !string.IsNullOrEmpty(partition)) p.Set(partition);
-            try { r.SetUnobscuredInView(doc.ActiveView, true); } catch { }
+            if (!ArbaPartition.Write(r, partition))
+                Warn(c, "no se pudo escribir la Particion \"" + partition + "\" en las barras");
+            if (!ArbaOrigin.WriteFor(r, c.Item.Host, ArbaContract.Vigas, face))
+                Warn(c, "no se pudo escribir \"" + ArbaContract.Origen.Name + "\" en las barras (el parametro del contrato no existe o es de solo lectura)");
+            try { r.SetUnobscuredInView(c.Doc.ActiveView, true); } catch { }
         }
 
-        public static RebarBarType FindBarType(Document doc, string name, string use)
+        private static void Warn(Ctx c, string text)
+        {
+            if (!c.Result.Warnings.Contains(text)) c.Result.Warnings.Add(text);
+        }
+
+        /// <summary>
+        /// Tipo de barra por nombre exacto o fragmento (NameMatch.First del codigo comun: el primero que coincide).
+        /// Lanza si no existe: nunca se sustituye por otro tipo. Si el fragmento coincide con varios tipos se avisa.
+        /// </summary>
+        public static RebarBarType FindBarType(Document doc, string name, string use, List<string> warnings = null)
         {
             var all = AllBarTypes(doc);
             if (all.Count == 0)
                 throw new InvalidOperationException("El proyecto no tiene ningun tipo de barra (RebarBarType). Carga una familia de armadura primero.");
-            string match = MatchName(all.Select(b => b.Name), name);
+            List<string> names = all.Select(b => b.Name).ToList();
+            string match = NameMatch.First(names, name);
             if (match == null)
                 throw new InvalidOperationException("el tipo de barra de " + use + " \"" + name + "\" no existe en este proyecto; elige uno de los cargados en la ventana");
+            WarnAmbiguous(warnings, names, name, match, "tipo de barra de " + use);
             return all.First(b => b.Name == match);
         }
 
         /// <summary>Id del tipo de gancho, o InvalidElementId si el nombre esta vacio. Lanza si el nombre no existe.</summary>
-        public static ElementId FindHookType(Document doc, string name)
+        public static ElementId FindHookType(Document doc, string name, List<string> warnings = null)
         {
             if (string.IsNullOrWhiteSpace(name)) return ElementId.InvalidElementId;
             var all = AllHookTypes(doc);
-            string match = MatchName(all.Select(h => h.Name), name);
+            List<string> names = all.Select(h => h.Name).ToList();
+            string match = NameMatch.First(names, name);
             if (match == null)
                 throw new InvalidOperationException("el tipo de gancho \"" + name + "\" no existe en este proyecto; elige uno de los cargados en la ventana o deja el gancho vacio");
+            WarnAmbiguous(warnings, names, name, match, "tipo de gancho");
             return all.First(h => h.Name == match).Id;
         }
 
-        /// <summary>
-        /// Nombre que corresponde a "name": coincidencia exacta, si no parcial (sin distinguir
-        /// mayusculas); null si no hay ninguna. Nunca se sustituye por otro: sin coincidencia no se arma.
-        /// </summary>
-        public static string MatchName(IEnumerable<string> names, string name)
+        private static void WarnAmbiguous(List<string> warnings, List<string> names, string name, string match, string what)
         {
-            if (string.IsNullOrWhiteSpace(name)) return null;
-            var list = names.ToList();
-            string exact = list.FirstOrDefault(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
-            if (exact != null) return exact;
-            return list.FirstOrDefault(n => n.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (warnings == null || !NameMatch.IsAmbiguous(names, name)) return;
+            string w = what + " \"" + name + "\" coincide con varios tipos (" + string.Join(", ", NameMatch.Candidates(names, name)) +
+                       "); se ha usado \"" + match + "\". Elige el nombre completo en la ventana para evitar dudas";
+            if (!warnings.Contains(w)) warnings.Add(w);
         }
 
         public static List<RebarBarType> AllBarTypes(Document doc) =>

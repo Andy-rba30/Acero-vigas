@@ -12,7 +12,19 @@
     <RootNamespace>BeamRebar</RootNamespace>
     <!-- Revit ya carga sus propias DLL: no copiarlas al output -->
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <!-- El submodulo esta dentro del proyecto: sus .cs los anade Arba.Comun.props (solo src/**), no el glob del SDK
+         (que ademas arrastraria tests/ y build/ del comun y duplicaria cada archivo: CS2002). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);external/**</DefaultItemExcludes>
   </PropertyGroup>
+
+  <!-- Codigo comun ARBA (submodulo external/ARBA-comun, etiqueta v1.0.0): se compila como fuente dentro de
+       este ensamblado (clases internal en el namespace Arba.Comun). EnableWindowsTargeting permite compilar
+       fuera de Windows (CI); la copia a Revit solo se hace en Windows. -->
+  <PropertyGroup>
+    <RevitVersion>2027</RevitVersion>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <Import Project="external/ARBA-comun/Arba.Comun.props" />
 
   <ItemGroup>
     <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2027.*" ExcludeAssets="runtime" />
@@ -26,7 +38,7 @@
   </ItemGroup>
 
   <!-- Copia automatica al directorio de add-ins de Revit al compilar en Debug -->
-  <Target Name="CopyToRevit" AfterTargets="Build" Condition="'$(Configuration)'=='Debug'">
+  <Target Name="CopyToRevit" AfterTargets="Build" Condition="'$(Configuration)'=='Debug' AND '$(OS)'=='Windows_NT'">
     <PropertyGroup>
       <AddinDir>$(AppData)\Autodesk\Revit\Addins\2027\BeamRebar\</AddinDir>
     </PropertyGroup>

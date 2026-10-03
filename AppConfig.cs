@@ -210,12 +210,17 @@ namespace BeamRebar
         /// </summary>
         public string JoinedGeometry { get; set; } = "auto";
 
+        /// <summary>Plantilla por defecto del contrato ARBA: "VIGAS - VIG-V-101" (sin codigo; la cara va en "ARBA - Codigo").</summary>
+        public const string DefaultPartitionTemplate = "{categoria} - {prefijo}-{marca}";
+
         /// <summary>
-        /// Plantilla del parametro Particion de cada barra. Comodines: {marca} (Marca del
-        /// elemento; si esta vacia se usa el Id), {id}, {tipo}, {familia}, {conjunto}
-        /// (nombre del juego de barras) y {cara} (superior / inferior / estribo).
+        /// Plantilla del parametro Particion de cada barra (contrato ARBA-comun). Comodines:
+        /// {categoria} (VIGAS, segun el anfitrion), {prefijo} (VIG), {marca} (Marca del elemento;
+        /// si esta vacia se usa el Id), {id}, {codigo} (= {cara}: superior / inferior / lateral /
+        /// baston / estribo), {tipo}, {familia} y {conjunto} (nombre del juego de barras).
+        /// Tiene que empezar por "{categoria} - {prefijo}-" para cumplir el contrato.
         /// </summary>
-        public string PartitionTemplate { get; set; } = "VIG-{marca}";
+        public string PartitionTemplate { get; set; } = DefaultPartitionTemplate;
 
         /// <summary>Espesor de las rebanadas de sondeo geometrico (mm).</summary>
         public double ProbeSliceMm { get; set; } = 10;
@@ -313,7 +318,7 @@ namespace BeamRebar
             if (PrismCheckStepMm <= 0) PrismCheckStepMm = 250;
             if (PrismCheckToleranceMm <= 0) PrismCheckToleranceMm = 2;
             if (RectilinearAngleDeg <= 0) RectilinearAngleDeg = 0.5;
-            if (string.IsNullOrWhiteSpace(PartitionTemplate)) PartitionTemplate = "VIG-{marca}";
+            if (string.IsNullOrWhiteSpace(PartitionTemplate)) PartitionTemplate = DefaultPartitionTemplate;
         }
 
         public static string ConfigPath()

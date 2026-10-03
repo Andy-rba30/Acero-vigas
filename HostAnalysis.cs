@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Arba.Comun;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Structure;
 
@@ -50,12 +51,17 @@ namespace BeamRebar
         public string Distribution(AppConfig cfg) =>
             string.IsNullOrWhiteSpace(DistributionOverride) ? cfg.Stirrups.Distribution : DistributionOverride;
 
+        /// <summary>
+        /// Particion del contrato ARBA para un conjunto de esta viga: la categoria la deduce el codigo comun del
+        /// anfitrion (VIGAS para armazon estructural), el prefijo es VIG y la cara (superior / inferior / lateral /
+        /// baston / estribo) va en {codigo}; con la plantilla por defecto queda "VIGAS - VIG-V-101".
+        /// </summary>
         public string Partition(AppConfig cfg, string setName, string face)
         {
-            return PartitionName.Expand(cfg.PartitionTemplate, new PartitionName.Source
+            return ArbaPartition.BuildFor(Host, ArbaContract.Vigas, cfg.PartitionTemplate, new PartitionName.Source
             {
-                Mark = Mark, Id = Host.Id.ToString(), TypeName = TypeName, FamilyName = FamilyName,
-                SetName = setName, Face = face
+                Mark = Mark, TypeName = TypeName, FamilyName = FamilyName,
+                SetName = setName, Code = face
             });
         }
 

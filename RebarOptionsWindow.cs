@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Arba.Comun;
 using Document = Autodesk.Revit.DB.Document;
 
 namespace BeamRebar
@@ -77,7 +78,7 @@ namespace BeamRebar
         private ComboBox _stType, _stHook, _stOrient, _joined;
         private TextBox _stDist, _stStartOff, _stEndOff, _cover, _partition;
         private CheckBox _stSym;
-        private TextBlock _message, _partitionPreview, _previewCaption;
+        private TextBlock _message, _partitionPreview, _partitionWarning, _previewCaption;
         private Button _buildButton;
         private SectionPreview _preview;
         private ElevationPreview _elevation;
@@ -442,7 +443,7 @@ namespace BeamRebar
                 Put(grid, row.Corner, r, 1);
                 row.Inter = TypeCombo(cfg.IntermediateBarTypeName);
                 row.Inter.Items.Insert(0, SameAsCorner);
-                if (RebarGenerator.MatchName(_barTypes, cfg.IntermediateBarTypeName) == null) row.Inter.SelectedIndex = 0;
+                if (NameMatch.First(_barTypes, cfg.IntermediateBarTypeName) == null) row.Inter.SelectedIndex = 0;
                 else row.Inter.SelectedIndex = row.Inter.SelectedIndex + 1;
                 row.Inter.ToolTip = "Tipo de barra de las intermedias de la capa (las que van entre las dos extremas). Puede ser otro diametro: \"2 de 3/4 + 1 de 5/8\".";
                 Put(grid, row.Inter, r, 2);
@@ -748,9 +749,14 @@ namespace BeamRebar
                    "geometria completa de la familia (todo el canto aunque la losa lo tape) y la longitud del solido cortado (entre caras de columna). " +
                    "Al cambiarlo se vuelven a leer todas las vigas.");
             _partition = new TextBox { Text = _cfg.PartitionTemplate, Margin = Pad };
-            AddRow(grid, r++, "Particion:", _partition, "Plantilla del parametro Particion de cada barra. Comodines: " + PartitionName.Help);
+            AddRow(grid, r++, "Particion:", _partition,
+                   "Plantilla del parametro Particion de cada conjunto (contrato ARBA " + ArbaContract.Version + "; por defecto \"" +
+                   AppConfig.DefaultPartitionTemplate + "\" = \"VIGAS - VIG-V-101\"). Tiene que empezar por \"{categoria} - {prefijo}-\" " +
+                   "para que el plugin de metrados agrupe las barras. Comodines: " + PartitionName.Help);
             _partitionPreview = new TextBlock { Foreground = RevitTheme.Muted, Margin = Pad, TextWrapping = TextWrapping.Wrap };
             AddRow(grid, r++, "", _partitionPreview, null);
+            _partitionWarning = new TextBlock { Foreground = RevitTheme.Error, Margin = Pad, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
+            AddRow(grid, r++, "", _partitionWarning, null);
             group.Content = grid;
             return group;
         }
@@ -810,6 +816,16 @@ namespace BeamRebar
             _message = new TextBlock { Foreground = RevitTheme.Error, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             DockPanel.SetDock(buttons, Dock.Right);
+            // pie: version del contrato ARBA-comun con la que se compilo el add-in
+            var version = new TextBlock
+            {
+                Text = "Contrato ARBA " + ArbaContract.Version, Foreground = RevitTheme.Hint, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0),
+                ToolTip = "Version del contrato ARBA-comun (particion, parametros compartidos \"ARBA - Origen\" / \"ARBA - Codigo\" / " +
+                          "\"Metrado - Elemento\" y cinta) con la que se compilo este add-in."
+            };
+            DockPanel.SetDock(version, Dock.Left);
+            panel.Children.Add(version);
 
             var save = new Button { Content = "Guardar como valores por defecto", Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(4, 0, 4, 0) };
             save.ToolTip = "Guarda lo elegido en config.json (" + AppConfig.ConfigPath() + ") para las proximas veces.";
@@ -882,7 +898,7 @@ namespace BeamRebar
         {
             var cb = new ComboBox { Margin = Pad };
             foreach (string n in _barTypes) cb.Items.Add(TypeDisplay(n));
-            string match = RebarGenerator.MatchName(_barTypes, current);
+            string match = NameMatch.First(_barTypes, current);
             cb.SelectedIndex = match == null ? -1 : _barTypes.IndexOf(match);
             return cb;
         }
@@ -895,7 +911,7 @@ namespace BeamRebar
             var cb = new ComboBox { Margin = Pad };
             cb.Items.Add(NoHook);
             foreach (string n in _hookTypes) cb.Items.Add(n);
-            string match = RebarGenerator.MatchName(_hookTypes, current);
+            string match = NameMatch.First(_hookTypes, current);
             cb.SelectedIndex = match == null ? 0 : _hookTypes.IndexOf(match) + 1;
             return cb;
         }
@@ -906,7 +922,7 @@ namespace BeamRebar
         private double HookAngle(string name)
         {
             if (string.IsNullOrEmpty(name)) return 0;
-            string match = RebarGenerator.MatchName(_hookTypes, name);
+            string match = NameMatch.First(_hookTypes, name);
             if (match != null && _hookAngles.TryGetValue(match, out double deg) && deg > 0) return deg;
             return 135;
         }
@@ -922,7 +938,7 @@ namespace BeamRebar
 
         private double DiameterFt(string typeName)
         {
-            string match = RebarGenerator.MatchName(_barTypes, typeName);
+            string match = NameMatch.First(_barTypes, typeName);
             return match != null && _diametersMm.TryGetValue(match, out double mm) ? BeamSection.Mm(mm) : 0;
         }
 
@@ -1107,7 +1123,8 @@ namespace BeamRebar
                 if (plan != null) _preview.Show(_selected.Section, plan, hookDeg); else _preview.Clear(text);
                 if (runs != null) _elevation.Show(_selected.Section, plan, runs, bastones, scratch); else _elevation.Clear(text);
                 _bastonPreview.Show(_selected.Section, plan, bastones, scratch);
-                _partitionPreview.Text = "Ejemplo: " + _selected.Partition(scratch, "estribo", "estribo");
+                _partitionPreview.Text = "Ejemplo: " + _selected.Partition(scratch, "estribo", "estribo") +
+                                         "   (ARBA - Origen = " + ArbaContract.Vigas.Origin + ", ARBA - Codigo = superior / inferior / lateral / baston / estribo)";
                 var bmsgs = new List<string>();
                 if (bastones == null) RebarGenerator.BastonRanges(_selected.Section, scratch, out bmsgs);
                 if (plan != null) bmsgs.AddRange(plan.Warnings.Where(w => w.StartsWith("baston", StringComparison.OrdinalIgnoreCase)));
@@ -1124,6 +1141,13 @@ namespace BeamRebar
                 _partitionPreview.Text = "";
                 _bastonMessage.Text = "";
             }
+
+            bool contract = ArbaPartition.TemplateFollowsContract(scratch.PartitionTemplate);
+            _partitionWarning.Visibility = contract ? Visibility.Collapsed : Visibility.Visible;
+            _partitionWarning.Text = contract ? "" :
+                "La plantilla no cumple el contrato ARBA " + ArbaContract.Version + ": tiene que empezar por \"{categoria} - {prefijo}-\" " +
+                "(por defecto \"" + AppConfig.DefaultPartitionTemplate + "\"). Las barras se crearan igual, pero el plugin de metrados " +
+                "no las agrupara como VIGAS - VIG-... y \"borrar y rearmar\" sigue funcionando por ARBA - Origen.";
 
             if (error != null) { _message.Foreground = RevitTheme.Error; _message.Text = error; }
             else if (_message.Foreground == RevitTheme.Error) _message.Text = "";
